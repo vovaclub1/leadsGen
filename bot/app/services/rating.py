@@ -1,15 +1,17 @@
 from app.db import db
-from app.utils import now_iso, season
+from app.utils import now_iso, parse_iso, season
 
 POINTS = {
     "contact": 10,
     "replied": 15,
     "accepted": 25,
     "won": 50,
+    "won_repeat": 30,
     "not_target": 1,
     "dnc_honest": 2,
     "timer": -5,
     "wrote_red": -15,
+    "rework": -3,
 }
 
 REASON_RU = {
@@ -17,10 +19,12 @@ REASON_RU = {
     "replied": "клиент ответил",
     "accepted": "лид принят старшим",
     "won": "сделка закрыта",
+    "won_repeat": "повторная сделка с тем же клиентом",
     "not_target": "верно отмечен нецелевой",
     "dnc_honest": "честно отметил «просил не писать»",
     "timer": "лид освобождён по таймеру",
     "wrote_red": "написал контакту из красного списка",
+    "rework": "карточка возвращена на доработку",
     "adjust": "корректировка владельца",
 }
 
@@ -70,3 +74,37 @@ async def history(user_id: int, limit: int = 10) -> list[dict]:
         "SELECT delta, reason, lead_id, created_at FROM points WHERE user_id = ? ORDER BY id DESC LIMIT ?",
         (user_id, limit),
     )
+
+
+def _median(values: list[int]) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    n = len(ordered)
+    return ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) // 2
+
+
+async def median_first_contact(user_id: int | None = None) -> int | None:
+    """Медиана минут между взятием лида и первым контактом (ТЗ 9.3). None — данных нет."""
+    sql = "SELECT assigned_to, claimed_at, contacted_at FROM leads WHERE claimed_at IS NOT NULL AND contacted_at IS NOT NULL"
+    params: tuple = ()
+    if user_id:
+        sql += " AND assigned_to = ?"
+        params = (user_id,)
+    current = season()
+    minutes = []
+    for row in await db.fetchall(sql, params):
+        if row["claimed_at"][:7] != current:
+            continue
+        delta = (parse_iso(row["contacted_at"]) - parse_iso(row["claimed_at"])).total_seconds() / 60
+        if delta >= 0:
+            minutes.append(int(delta))
+    return _median(minutes)
+
+
+def fmt_minutes(value: int | None) -> str:
+    if value is None:
+        return "нет данных"
+    if value < 60:
+        return f"{value} мин"
+    return f"{value // 60} ч {value % 60:02d} мин"

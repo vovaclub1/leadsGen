@@ -12,7 +12,7 @@ from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats, BotCommand
 from app import runtime
 from app.config import config
 from app.db import db
-from app.handlers import admin, common, leads, senior
+from app.handlers import admin, catalog, common, leads, quiz, senior
 from app.middleware import AccessMiddleware
 from app.scheduler import scheduler_loop
 from app.services.keypool import roll_periods
@@ -38,6 +38,9 @@ COMMON_COMMANDS = [
     BotCommand(command="add", description="Добавить лид вручную"),
     BotCommand(command="check", description="Проверить контакт по красному списку"),
     BotCommand(command="find", description="Карточка канала по @username"),
+    BotCommand(command="catalog", description="Каталог каналов MORIER по вертикали"),
+    BotCommand(command="price", description="Разрешённая вилка цен по вертикали"),
+    BotCommand(command="quiz", description="Квиз новичка — допуск к очереди"),
     BotCommand(command="help", description="Как работать"),
     BotCommand(command="cancel", description="Отменить текущее действие"),
 ]
@@ -62,7 +65,7 @@ def build_dispatcher() -> Dispatcher:
     dp.message.outer_middleware(access)
     dp.callback_query.outer_middleware(access)
     # Порядок важен: у leads есть широкий перехват ссылок в личке, поэтому он последний.
-    dp.include_routers(common.router, admin.router, senior.router, leads.router)
+    dp.include_routers(common.router, admin.router, senior.router, quiz.router, catalog.router, leads.router)
     return dp
 
 

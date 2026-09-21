@@ -12,9 +12,13 @@ from app.db import db
 from app.filters import OWNER, SENIOR_UP
 from app.keyboards import LOST_REASONS, handoff_kb, reasons_kb, skip_kb
 from app.services import leads, rating
+from app.statuses import ACCEPTED, HANDOFF
 from app.utils import h, mention, now_iso
 
 router = Router(name="senior")
+
+# ТЗ 9.4: лимит ручной корректировки баллов за раз.
+ADJUST_LIMIT = 50
 
 
 class ReturnSt(StatesGroup):
@@ -24,6 +28,10 @@ class ReturnSt(StatesGroup):
 class WonSt(StatesGroup):
     amount = State()
     margin = State()
+
+
+class Supervise(StatesGroup):
+    note = State()
 
 
 # ---------- список передач ----------
@@ -55,7 +63,7 @@ async def handoffs_cb(query: CallbackQuery) -> None:
 @router.callback_query(LeadCb.filter(F.a == "acc"), SENIOR_UP)
 async def accept(query: CallbackQuery, callback_data: LeadCb, me: dict) -> None:
     lead = await leads.get(callback_data.id)
-    if not lead or lead["status"] != "HANDOFF":
+    if not lead or lead["status"] != HANDOFF:
         await query.answer("Лид уже принят или закрыт.", show_alert=True)
         return
     text = await leads.accept(lead, me)
@@ -68,7 +76,7 @@ async def accept(query: CallbackQuery, callback_data: LeadCb, me: dict) -> None:
 @router.callback_query(LeadCb.filter(F.a == "ret"), SENIOR_UP)
 async def return_start(query: CallbackQuery, callback_data: LeadCb, state: FSMContext) -> None:
     lead = await leads.get(callback_data.id)
-    if not lead or lead["status"] != "HANDOFF":
+    if not lead or lead["status"] != HANDOFF:
         await query.answer("Лид уже принят или закрыт.", show_alert=True)
         return
     await state.set_state(ReturnSt.comment)
@@ -82,10 +90,35 @@ async def return_apply(message: Message, me: dict, state: FSMContext) -> None:
     data = await state.get_data()
     await state.clear()
     lead = await leads.get(data.get("lead_id", 0))
-    if not lead or lead["status"] != "HANDOFF":
+    if not lead or lead["status"] != HANDOFF:
         await message.answer("Лид уже не в передаче.")
         return
     await message.answer(await leads.return_to_sdr(lead, me, message.text))
+
+
+# ---------- надзор за новичками (ТЗ 9.6) ----------
+
+@router.callback_query(LeadCb.filter(F.a == "supok"), SENIOR_UP)
+async def supervise_ok(query: CallbackQuery, callback_data: LeadCb, me: dict) -> None:
+    await query.message.edit_reply_markup(reply_markup=None)
+    await leads.dm(int(callback_data.v or 0), f"👍 Старший {mention(me)} посмотрел ваше первое сообщение по лиду #{callback_data.id} — ок.")
+    await query.answer("Отправлено новичку.")
+
+
+@router.callback_query(LeadCb.filter(F.a == "supnote"), SENIOR_UP)
+async def supervise_note_start(query: CallbackQuery, callback_data: LeadCb, state: FSMContext) -> None:
+    await state.set_state(Supervise.note)
+    await state.update_data(sdr_id=int(callback_data.v or 0), lead_id=callback_data.id)
+    await query.message.answer("Что поправить новичку? Одним сообщением — уйдёт ему в личку. /cancel — отмена.")
+    await query.answer()
+
+
+@router.message(Supervise.note, SENIOR_UP, F.text)
+async def supervise_note(message: Message, me: dict, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.clear()
+    await leads.dm(data.get("sdr_id"), f"✍️ Замечание старшего {mention(me)} по лиду #{data.get('lead_id')}:\n{h(message.text)}")
+    await message.answer("Отправлено новичку.")
 
 
 # ---------- WON / LOST ----------
@@ -93,7 +126,7 @@ async def return_apply(message: Message, me: dict, state: FSMContext) -> None:
 @router.callback_query(LeadCb.filter(F.a == "won"), SENIOR_UP)
 async def won_start(query: CallbackQuery, callback_data: LeadCb, state: FSMContext) -> None:
     lead = await leads.get(callback_data.id)
-    if not lead or lead["status"] != "ACCEPTED":
+    if not lead or lead["status"] != ACCEPTED:
         await query.answer("Сначала примите лид.", show_alert=True)
         return
     await state.set_state(WonSt.amount)
@@ -117,7 +150,7 @@ async def _finish_won(state: FSMContext, me: dict, margin: int | None, send) -> 
     data = await state.get_data()
     await state.clear()
     lead = await leads.get(data.get("lead_id", 0))
-    if not lead or lead["status"] != "ACCEPTED":
+    if not lead or lead["status"] != ACCEPTED:
         await send("Лид уже не в работе у старшего.")
         return
     await send(await leads.won(lead, me, int(data.get("amount") or 0), margin))
@@ -138,7 +171,7 @@ async def won_margin_skip(query: CallbackQuery, me: dict, state: FSMContext) -> 
 @router.callback_query(LeadCb.filter(F.a == "lost"), SENIOR_UP)
 async def lost_menu(query: CallbackQuery, callback_data: LeadCb) -> None:
     lead = await leads.get(callback_data.id)
-    if not lead or lead["status"] != "ACCEPTED":
+    if not lead or lead["status"] != ACCEPTED:
         await query.answer("Сначала примите лид.", show_alert=True)
         return
     await query.message.answer(f"Почему лид #{lead['id']} потерян?", reply_markup=reasons_kb(lead["id"], "lost"))
@@ -148,7 +181,7 @@ async def lost_menu(query: CallbackQuery, callback_data: LeadCb) -> None:
 @router.callback_query(LeadCb.filter(F.a == "lostr"), SENIOR_UP)
 async def lost_apply(query: CallbackQuery, callback_data: LeadCb, me: dict) -> None:
     lead = await leads.get(callback_data.id)
-    if not lead or lead["status"] != "ACCEPTED":
+    if not lead or lead["status"] != ACCEPTED:
         await query.answer("Лид уже закрыт.", show_alert=True)
         return
     await query.message.edit_text(await leads.lost(lead, me, callback_data.v, LOST_REASONS.get(callback_data.v, callback_data.v)))
@@ -164,6 +197,9 @@ async def adjust(message: Message, command: CommandObject) -> None:
         await message.answer("Формат: /adjust @username ±N причина")
         return
     username, delta, reason = match.group(1), int(match.group(2)), match.group(3).strip() or "ручная корректировка"
+    if abs(delta) > ADJUST_LIMIT:
+        await message.answer(f"Лимит ручной корректировки — ±{ADJUST_LIMIT} за раз.")
+        return
     target = await db.fetchone("SELECT * FROM users WHERE LOWER(username) = ?", (username.lower(),))
     if not target:
         await message.answer("Сотрудник с таким username не найден среди добавленных.")

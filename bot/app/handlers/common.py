@@ -26,8 +26,8 @@ def help_text(role: str, sla: int, limit: int) -> str:
         "4. Клиент молчит — бот напомнит о касании (3 → 7 → 7 дней). Ответил — перешлите его ответ («Клиент ответил»).\n"
         "5. Выяснили бюджет, задачу и сроки — «Передать старшему». Принят → +25, сделка → +50.\n"
         "6. Клиент просит не писать — жмите «Просил не писать». Это +2, а не минус. Написать контакту из красного списка — −15.\n\n"
-        "<b>Баллы:</b> контакт +10 · ответ +15 · принят +25 · сделка +50 · нецелевой +1 · таймер −5\n"
-        "<b>Команды:</b> /queue /my /me /top /add /check /find /cancel"
+        "<b>Баллы:</b> контакт +10 · ответ +15 · принят +25 · сделка +50 · повторная сделка +30 · нецелевой +1 · таймер −5 · доработка −3\n"
+        "<b>Команды:</b> /queue /my /me /top /add /check /find /catalog /price /quiz /cancel"
     )
     if role in ("owner", "senior"):
         base += "\n<b>Старшему:</b> /handoffs — передачи, /blacklist @канал причина — стоп-лист сущностей, /dnc @user причина — красный список"
@@ -155,6 +155,8 @@ async def render_top(me: dict) -> str:
         medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(index, f"{index}.")
         marker = " ← вы" if row["id"] == me["id"] else ""
         lines.append(f"{medal} {mention(row)} — {row['pts']} б. · сделок {row['wins'] or 0} · ответов {row['replies'] or 0}{marker}")
+    median = await rating.median_first_contact()
+    lines.append(f"\n⏱ Медиана первого контакта по команде: {rating.fmt_minutes(median)}")
     return "\n".join(lines)
 
 
@@ -176,6 +178,13 @@ async def me_cmd(message: Message, me: dict) -> None:
     history = await rating.history(me["id"], limit=8)
     active = len(await leads.my_leads(me["id"]))
     lines = [f"<b>{mention(me)}</b> · {ROLE_RU[me['role']]}", f"Баллы за сезон: <b>{total}</b>" + (f" · место {place}" if place else ""), f"Активных лидов: {active}"]
+    mine = await rating.median_first_contact(me["id"])
+    team = await rating.median_first_contact()
+    if mine is not None and team is not None:
+        verdict = "быстрее медианы команды" if mine <= team else "медленнее медианы команды"
+        lines.append(f"⏱ Медиана вашего первого контакта: {rating.fmt_minutes(mine)} ({verdict}: {rating.fmt_minutes(team)})")
+    elif mine is not None:
+        lines.append(f"⏱ Медиана вашего первого контакта: {rating.fmt_minutes(mine)}")
     if history:
         lines.append("\nПоследние начисления:")
         for row in history:

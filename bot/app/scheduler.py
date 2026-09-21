@@ -12,6 +12,7 @@ from app.keyboards import open_kb, touch_kb
 from app.services import dnc, leads, rating, report, search_poller
 from app.services.ai import ai
 from app.services.scanner import scanner
+from app.statuses import CLAIMED, CONTACTED, REPLIED
 from app.utils import day_key, fmt_time, h, hours_between, in_days, in_minutes, local_now, mention, now_iso, season
 
 log = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ log = logging.getLogger(__name__)
 async def scheduler_loop() -> None:
     await asyncio.sleep(5)
     while True:
-        for job in (sla_jobs, cadence_jobs, aging_jobs, dnc_jobs, daily_jobs, search_job, ai_health_job):
+        for job in (sla_jobs, senior_sla_jobs, cadence_jobs, aging_jobs, dnc_jobs, daily_jobs, search_job, ai_health_job):
             try:
                 await job()
             except Exception as exc:  # noqa: BLE001 — один упавший job не должен останавливать остальные
@@ -76,6 +77,22 @@ async def sla_jobs() -> None:
     expired = await db.fetchall("SELECT * FROM leads WHERE status = 'CLAIMED' AND contact_deadline <= ?", (now_iso(),))
     for lead in expired:
         await leads.release_by_timer(lead)
+
+
+async def senior_sla_jobs() -> None:
+    """ТЗ 8.4: передача должна быть принята за 2 рабочих часа, иначе узнаёт владелец."""
+    hours = await st.get_int("senior_sla_hours")
+    overdue = await db.fetchall(
+        "SELECT * FROM leads WHERE status = 'HANDOFF' AND handoff_at <= ? AND aging_flags NOT LIKE '%senior_sla%'",
+        (in_minutes(-hours * 60),),
+    )
+    for lead in overdue:
+        await db.execute("UPDATE leads SET aging_flags = aging_flags || 'senior_sla,' WHERE id = ?", (lead["id"],))
+        sdr = await leads.user(lead.get("assigned_to"))
+        await _tell_owners(
+            f"⏰ Передача по лиду #{lead['id']} «{h(lead['title'])}» от {mention(sdr)} не принята {hours} ч. "
+            f"Разберите: /handoffs"
+        )
 
 
 # ---------- каденция ----------
@@ -151,8 +168,24 @@ async def daily_jobs() -> None:
         await _tell_owners(await report.weekly())
     if local_now().weekday() == 0 and _time_passed("10:25") and await _once_per_day("discover"):
         await discover_donors()
+    if local_now().weekday() == 0 and _time_passed("10:35") and await _once_per_day("chanstats"):
+        await channel_stats_reminder()
     if _time_passed("03:00") and await _once_per_day("backup"):
         await backup()
+
+
+async def channel_stats_reminder() -> None:
+    """ТЗ 8.1: раз в неделю напоминаем обновить цифры в таблице каналов MORIER."""
+    stale = await db.fetchall(
+        "SELECT username, vertical FROM morier_channels WHERE stat_updated_at IS NULL OR stat_updated_at < ?",
+        (in_days(-7),),
+    )
+    if not stale:
+        return
+    lines = ["📺 Пора обновить статистику каналов MORIER (7+ дней без обновления):"]
+    lines.extend(f"• @{h(row['username'])} — {row['vertical']}" for row in stale[:15])
+    lines.append("Обновление: /admin → Каналы MORIER → добавить заново той же строкой.")
+    await _tell_owners("\n".join(lines))
 
 
 async def morning_plan() -> None:
@@ -161,9 +194,9 @@ async def morning_plan() -> None:
     for seller in sellers:
         mine = await leads.my_leads(seller["id"])
         lines = [f"☀️ План на {local_now().strftime('%d.%m')}"]
-        touches = [l for l in mine if l["status"] == "CONTACTED" and l.get("next_touch_at") and l["next_touch_at"] <= in_days(1)]
-        pending = [l for l in mine if l["status"] == "CLAIMED"]
-        replied = [l for l in mine if l["status"] == "REPLIED"]
+        touches = [l for l in mine if l["status"] == CONTACTED and l.get("next_touch_at") and l["next_touch_at"] <= in_days(1)]
+        pending = [l for l in mine if l["status"] == CLAIMED]
+        replied = [l for l in mine if l["status"] == REPLIED]
         if pending:
             lines.append("⏱ Ждут первого контакта:\n" + "\n".join(leads.short_line(l) for l in pending))
         if replied:
@@ -212,6 +245,7 @@ async def weekly_board() -> None:
     for index, row in enumerate(board, start=1):
         medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(index, f"{index}.")
         lines.append(f"{medal} {mention(row)} — {row['pts']} б. · сделок {row['wins'] or 0} · ответов {row['replies'] or 0}")
+    lines.append(f"⏱ Медиана первого контакта: {rating.fmt_minutes(await rating.median_first_contact())}")
     try:
         await runtime.bot.send_message(int(group_id), "\n".join(lines))
     except Exception as exc:  # noqa: BLE001

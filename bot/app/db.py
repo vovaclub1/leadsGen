@@ -7,12 +7,16 @@ from app.config import config
 SCHEMA = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
 
 # CREATE TABLE IF NOT EXISTS не добавляет колонки в уже созданную базу, поэтому новые поля
-# доезжают до существующих установок отдельным списком (таблица, колонка, определение).
-MIGRATIONS: tuple[tuple[str, str, str], ...] = (
-    ("keywords", "created_at", "TEXT"),
-    ("ai_usage", "ok", "INTEGER NOT NULL DEFAULT 1"),
-    ("ai_usage", "error", "TEXT"),
-    ("ad_posts", "image_note", "TEXT"),
+# доезжают до существующих установок отдельным списком (таблица, колонка, определение, бэкфилл|None).
+MIGRATIONS: tuple[tuple[str, str, str, str | None], ...] = (
+    ("keywords", "created_at", "TEXT", None),
+    ("ai_usage", "ok", "INTEGER NOT NULL DEFAULT 1", None),
+    ("ai_usage", "error", "TEXT", None),
+    ("ad_posts", "image_note", "TEXT", None),
+    # Квиз новичка (ТЗ 9.6): уже работающим сотрудникам допуск выдан задним числом,
+    # новые SDR проходят квиз с нуля.
+    ("users", "quiz_passed", "INTEGER NOT NULL DEFAULT 0", "UPDATE users SET quiz_passed = 1"),
+    ("users", "quiz_at", "TEXT", None),
 )
 
 
@@ -31,12 +35,14 @@ class Database:
         await self.conn.commit()
 
     async def _migrate(self) -> None:
-        for table, column, definition in MIGRATIONS:
+        for table, column, definition, backfill in MIGRATIONS:
             cur = await self.conn.execute(f"PRAGMA table_info({table})")
             columns = {row[1] for row in await cur.fetchall()}
             await cur.close()
             if columns and column not in columns:
                 await self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+                if backfill:
+                    await self.conn.execute(backfill)
 
     async def execute(self, sql: str, params: tuple = ()) -> aiosqlite.Cursor:
         cur = await self.conn.execute(sql, params)

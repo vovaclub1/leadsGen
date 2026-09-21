@@ -25,6 +25,9 @@ DEFAULTS: dict[str, str] = {
     "aging_hot_minutes": "15",
     "aging_senior_hours": "24",
     "aging_archive_days": "5",
+    "senior_sla_hours": "2",
+    "supervised_leads": "5",
+    "quiz_questions": "",
 }
 
 LABELS: dict[str, str] = {
@@ -52,6 +55,9 @@ LABELS: dict[str, str] = {
     "aging_hot_minutes": "Горячий не взят → пинг всем, минут",
     "aging_senior_hours": "Никто не взял → старшему, часов",
     "aging_archive_days": "Никто не взял → архив, дней",
+    "senior_sla_hours": "SLA принятия передачи старшим, часов",
+    "supervised_leads": "Первые N лидов новичка под надзором старшего",
+    "quiz_questions": "Вопросы квиза новичка (JSON; пусто — встроенные)",
 }
 
 _cache: dict[str, str] = {}

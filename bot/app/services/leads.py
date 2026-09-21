@@ -8,28 +8,15 @@ from aiogram.exceptions import TelegramAPIError
 from app import runtime
 from app import settings_store as st
 from app.db import db
-from app.keyboards import group_card_kb, private_card_kb
-from app.services import dnc, enrich, rating, scoring, trustat
+from app.keyboards import group_card_kb, private_card_kb, supervise_kb
+from app.services import channels, dnc, enrich, rating, scoring, trustat
 from app.services.ai import ai, few_shot_examples
+from app.statuses import (
+    ACCEPTED, ACTIVE, CLAIMED, CONTACTED, HANDOFF, NEW, REPLIED, STATUS_RU, WON, is_open,
+)
 from app.utils import fmt_num, fmt_time, h, in_days, in_minutes, mention, minutes_left, now_iso, now_utc, parse_iso, trunc
 
 log = logging.getLogger(__name__)
-
-ACTIVE = ("CLAIMED", "CONTACTED", "REPLIED", "HANDOFF", "ACCEPTED")
-OPEN = ("NEW",) + ACTIVE
-STATUS_RU = {
-    "NEW": "В очереди",
-    "CLAIMED": "Взят, ждёт первого контакта",
-    "CONTACTED": "Контакт установлен",
-    "REPLIED": "Клиент ответил",
-    "HANDOFF": "Передан старшему",
-    "ACCEPTED": "В работе у старшего",
-    "WON": "Сделка закрыта",
-    "LOST": "Потерян",
-    "NOT_TARGET": "Нецелевой",
-    "DUPLICATE": "Дубликат",
-    "ARCHIVED": "Архив",
-}
 VERTICAL_RU = {
     "brawl": "Brawl Stars", "clash": "Clash / Minecraft", "dota": "Dota 2", "cs2": "CS2", "steam": "Steam",
     "streaming": "Стриминг", "gaming_news": "Игровые новости", "crypto": "Крипта", "news": "Новости",
@@ -136,7 +123,7 @@ async def create_lead(
 
     existing = await db.fetchone("SELECT * FROM leads WHERE entity_key = ? ORDER BY id DESC LIMIT 1", (key,))
     if existing:
-        if existing["status"] in OPEN:
+        if is_open(existing["status"]):
             if source == "scanner":
                 await update(existing["id"], {"ad_count": existing["ad_count"] + 1})
                 await _notify_new_placement(existing, donor)
@@ -256,7 +243,7 @@ def contact_line(lead: dict, reveal: bool = False) -> str:
     return "не указан в описании — ищите в закрепе или пишите через комментарии"
 
 
-def render_card(lead: dict, mode: str = "group", assignee: dict | None = None, reveal: bool = False) -> str:
+def render_card(lead: dict, mode: str = "group", assignee: dict | None = None, reveal: bool = False, matrix: str | None = None) -> str:
     data = ai_data(lead)
     head = f"{scoring.CATEGORY_RU[lead['category']]} · #{lead['id']}"
     if lead.get("niche"):
@@ -293,16 +280,16 @@ def render_card(lead: dict, mode: str = "group", assignee: dict | None = None, r
     if not data and not ai.enabled:
         lines.append("<i>ИИ-анализ выключен — оцените вручную</i>")
 
-    if mode == "group" and lead["status"] != "NEW":
+    if mode == "group" and lead["status"] != NEW:
         lines.append(f"\nСтатус: {STATUS_RU.get(lead['status'], lead['status'])}")
 
     if mode in ("private", "handoff"):
         lines.append(f"\nСтатус: <b>{STATUS_RU.get(lead['status'], lead['status'])}</b>")
-        if lead["status"] == "CLAIMED":
+        if lead["status"] == CLAIMED:
             lines.append(f"⏱ Первый контакт до {fmt_time(lead['contact_deadline'])} · осталось {max(0, minutes_left(lead['contact_deadline']))} мин")
-        if lead["status"] == "CONTACTED" and lead.get("next_touch_at"):
+        if lead["status"] == CONTACTED and lead.get("next_touch_at"):
             lines.append(f"Следующее касание: {fmt_time(lead['next_touch_at'], with_date=True)} (№{lead['touch_count'] + 1})")
-        if lead["status"] == "CLAIMED" and data.get("draft"):
+        if lead["status"] == CLAIMED and data.get("draft"):
             lines.append(f"\n<b>Черновик первого сообщения</b> — перепишите под себя, шаблоны клиенты чуют:\n<i>{h(data['draft'])}</i>")
         if lead.get("note"):
             lines.append(f"\n🗒 Заметки:\n{h(lead['note'])}")
@@ -313,6 +300,8 @@ def render_card(lead: dict, mode: str = "group", assignee: dict | None = None, r
             lines.append(h(lead["handoff_note"]))
         if lead.get("first_message"):
             lines.append(f"Первое сообщение SDR:\n<i>{h(trunc(lead['first_message'], 400))}</i>")
+        if matrix:
+            lines.append(f"\n<b>Матрица размещаемости</b>:\n{matrix}")
         if lead.get("trustat_json"):
             try:
                 lines.append(trustat.format_stat(json.loads(lead["trustat_json"])))
@@ -352,8 +341,9 @@ async def send_private_card(lead: dict, to_user: dict, prefix: str | None = None
         return
     reveal = to_user["role"] in ("owner", "senior")
     assignee = await user(lead.get("assigned_to"))
-    mode = "handoff" if lead["status"] in ("HANDOFF", "ACCEPTED") and reveal else "private"
-    text = render_card(lead, mode, assignee=assignee, reveal=reveal)
+    mode = "handoff" if lead["status"] in (HANDOFF, ACCEPTED) and reveal else "private"
+    matrix = await channels.placement_matrix(lead.get("vertical"), lead.get("risk_topic", "none")) if mode == "handoff" else None
+    text = render_card(lead, mode, assignee=assignee, reveal=reveal, matrix=matrix)
     if prefix:
         text = f"{prefix}\n\n{text}"
     try:
@@ -382,8 +372,10 @@ async def claim(lead_id: int, me: dict) -> tuple[bool, str]:
     lead = await get(lead_id)
     if not lead:
         return False, "Лид не найден."
-    if lead["status"] != "NEW":
+    if lead["status"] != NEW:
         return False, "Лид уже взят или закрыт."
+    if me["role"] == "sdr" and not me.get("quiz_passed"):
+        return False, "Сначала пройдите квиз новичка: /quiz. Без него очередь закрыта."
     if lead["contact_state"] in ("red", "orange") and me["role"] == "sdr":
         return False, "Контакт закрыт для SDR — этот лид берёт только старший."
     if await db.fetchone("SELECT 1 FROM lead_events WHERE lead_id = ? AND user_id = ? AND type = 'released'", (lead_id, me["id"])):
@@ -435,7 +427,7 @@ async def release_by_timer(lead: dict) -> None:
 async def set_contacted(lead: dict, me: dict, first_message: str | None) -> str:
     cadence = await st.cadence()
     await update(lead["id"], {
-        "status": "CONTACTED", "contacted_at": now_iso(), "first_message": trunc(first_message, 2000),
+        "status": CONTACTED, "contacted_at": now_iso(), "first_message": trunc(first_message, 2000),
         "touch_count": 1, "next_touch_at": in_days(cadence[0]), "contact_deadline": None,
     })
     await log_event(lead["id"], me["id"], "contacted")
@@ -446,13 +438,32 @@ async def set_contacted(lead: dict, me: dict, first_message: str | None) -> str:
         note += f"\n\n⛔ Контакт был в {dnc.LEVEL_SHORT[lead['contact_state']]} списке: {penalty} баллов. Старшие уведомлены."
         for senior in await seniors(exclude=me["id"]):
             await dm(senior["id"], f"⛔ {mention(me)} написал закрытому контакту по лиду #{lead['id']} «{h(lead['title'])}».")
+    await supervise_newbie(lead, me, first_message)
     fresh = await get(lead["id"])
     await update_group_card(fresh, f"✉️ Контакт установлен · {mention(me)}")
     return note
 
 
+async def supervise_newbie(lead: dict, me: dict, first_message: str | None) -> None:
+    """ТЗ 9.6: первые 5 лидов новичка старший смотрит после отправки (не до — чтобы не ломать SLA)."""
+    if not first_message:
+        return
+    accepted = await db.scalar(
+        "SELECT COUNT(*) FROM leads WHERE assigned_to = ? AND status IN ('ACCEPTED', 'WON')", (me["id"],)
+    ) or 0
+    if accepted >= await st.get_int("supervised_leads"):
+        return
+    for senior in await seniors(exclude=me["id"]):
+        await dm(
+            senior["id"],
+            f"👀 Новичок {mention(me)} — первое сообщение по лиду #{lead['id']} «{h(lead['title'])}» "
+            f"(уже отправлено клиенту):\n\n<i>{h(trunc(first_message, 600))}</i>",
+            reply_markup=supervise_kb(lead["id"], me["id"]),
+        )
+
+
 async def set_replied(lead: dict, me: dict, reply_text: str | None) -> str:
-    await update(lead["id"], {"status": "REPLIED", "replied_at": now_iso(), "next_touch_at": None})
+    await update(lead["id"], {"status": REPLIED, "replied_at": now_iso(), "next_touch_at": None})
     await log_event(lead["id"], me["id"], "replied", trunc(reply_text, 500))
     points = await rating.add(me["id"], "replied", lead["id"])
     fresh = await get(lead["id"])
@@ -556,23 +567,32 @@ async def accept(lead: dict, senior: dict) -> str:
 
 
 async def return_to_sdr(lead: dict, senior: dict, comment: str) -> str:
-    status = "REPLIED" if lead.get("replied_at") else "CONTACTED"
+    status = REPLIED if lead.get("replied_at") else CONTACTED
     await update(lead["id"], {"status": status, "handoff_at": None})
     await log_event(lead["id"], senior["id"], "returned", comment)
     if lead.get("assigned_to"):
+        penalty = await rating.add(lead["assigned_to"], "rework", lead["id"])
         owner = await user(lead["assigned_to"])
         fresh = await get(lead["id"])
         if owner:
-            await send_private_card(fresh, owner, prefix=f"↩️ Старший вернул лид с комментарием:\n<i>{h(comment)}</i>")
+            await send_private_card(fresh, owner, prefix=f"↩️ Старший вернул лид с комментарием:\n<i>{h(comment)}</i>\n({penalty} балла за доработку)")
     return "Возвращено SDR."
 
 
 async def won(lead: dict, senior: dict, amount: int, margin: int | None) -> str:
-    await update(lead["id"], {"status": "WON", "closed_at": now_iso(), "won_amount": amount, "won_margin": margin})
+    await update(lead["id"], {"status": WON, "closed_at": now_iso(), "won_amount": amount, "won_margin": margin})
     await log_event(lead["id"], senior["id"], "won", f"{amount}/{margin}")
     if lead.get("assigned_to"):
         points = await rating.add(lead["assigned_to"], "won", lead["id"])
-        await dm(lead["assigned_to"], f"🏆 Сделка по лиду #{lead['id']} «{h(lead['title'])}» закрыта на {amount:,} ₽. +{points} баллов!".replace(",", " "))
+        text = f"🏆 Сделка по лиду #{lead['id']} «{h(lead['title'])}» закрыта на {amount:,} ₽. +{points} баллов!".replace(",", " ")
+        # ТЗ 9.2: повторная сделка с тем же клиентом — отдельный бонус.
+        repeat = await db.scalar(
+            "SELECT COUNT(*) FROM leads WHERE entity_key = ? AND status = 'WON' AND id != ?", (lead["entity_key"], lead["id"])
+        ) or 0
+        if repeat:
+            bonus = await rating.add(lead["assigned_to"], "won_repeat", lead["id"])
+            text += f"\n🔁 Это уже не первый deal с этим клиентом: +{bonus} за повторную сделку."
+        await dm(lead["assigned_to"], text)
     fresh = await get(lead["id"])
     await update_group_card(fresh, f"🏆 СДЕЛКА · {amount:,} ₽ · SDR {mention(await user(lead.get('assigned_to')))} · закрыл {mention(senior)}".replace(",", " "))
     return "Сделка записана. Баллы начислены SDR."
@@ -609,8 +629,8 @@ async def handoffs() -> list[dict]:
 def short_line(lead: dict) -> str:
     ident = f"@{h(lead['username'])}" if lead.get("username") else h(lead.get("url") or "")
     extra = ""
-    if lead["status"] == "CLAIMED":
+    if lead["status"] == CLAIMED:
         extra = f" · ⏱ до {fmt_time(lead['contact_deadline'])}"
-    elif lead["status"] == "CONTACTED" and lead.get("next_touch_at"):
+    elif lead["status"] == CONTACTED and lead.get("next_touch_at"):
         extra = f" · касание {fmt_time(lead['next_touch_at'], with_date=True)}"
     return f"#{lead['id']} {scoring.CATEGORY_RU[lead['category']].split()[0]} <b>{h(lead['title'])}</b> {ident} · {h(lead.get('niche') or '')}{extra}"

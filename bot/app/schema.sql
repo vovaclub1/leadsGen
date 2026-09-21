@@ -189,3 +189,22 @@ CREATE TABLE IF NOT EXISTS ai_usage (
   ok INTEGER NOT NULL DEFAULT 1,
   error TEXT
 );
+
+-- Каналы MORIER (ТЗ 8.1): каталог, вилка цен, матрица размещаемости.
+-- buy_price видит только владелец; flags — тематики, которые канал ПРИНИМАЕТ (betting, casino, crypto, adult, vpn).
+CREATE TABLE IF NOT EXISTS morier_channels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL,
+  title TEXT,
+  vertical TEXT NOT NULL,
+  subscribers INTEGER,
+  reach_24h INTEGER,
+  price_from INTEGER,
+  price_to INTEGER,
+  buy_price INTEGER,
+  category TEXT NOT NULL DEFAULT 'B' CHECK (category IN ('A', 'B', 'C')),
+  flags TEXT NOT NULL DEFAULT '',
+  admin_contact TEXT,
+  stat_updated_at TEXT,
+  created_at TEXT NOT NULL
+);

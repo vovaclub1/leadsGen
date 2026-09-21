@@ -12,8 +12,22 @@ def _pct(part: int, whole: int) -> str:
     return f"{round(part / whole * 100)}%" if whole else "—"
 
 
-async def _count(where: str, params: tuple) -> int:
-    return int(await db.scalar(f"SELECT COUNT(*) FROM leads WHERE {where}", params) or 0)
+# Белый список фильтров: _count склеивает SQL только с этими константами, пользовательский
+# ввод сюда не попадает никогда — параметр всегда один и тот же `since`.
+COUNT_FILTERS = {
+    "new": "created_at >= ?",
+    "claimed": "claimed_at >= ?",
+    "contacted": "contacted_at >= ?",
+    "replied": "replied_at >= ?",
+    "handed": "handoff_at >= ?",
+    "won": "status = 'WON' AND closed_at >= ?",
+    "lost": "status = 'LOST' AND closed_at >= ?",
+    "not_target": "status = 'NOT_TARGET' AND closed_at >= ?",
+}
+
+
+async def _count(name: str, params: tuple) -> int:
+    return int(await db.scalar(f"SELECT COUNT(*) FROM leads WHERE {COUNT_FILTERS[name]}", params) or 0)
 
 
 async def weekly(days: int = 7) -> str:
@@ -21,14 +35,14 @@ async def weekly(days: int = 7) -> str:
     ended = local_now().strftime("%d.%m")
     started = (local_now() - timedelta(days=days)).strftime("%d.%m")
 
-    new = await _count("created_at >= ?", (since,))
-    claimed = await _count("claimed_at >= ?", (since,))
-    contacted = await _count("contacted_at >= ?", (since,))
-    replied = await _count("replied_at >= ?", (since,))
-    handed = await _count("handoff_at >= ?", (since,))
-    won = await _count("status = 'WON' AND closed_at >= ?", (since,))
-    lost = await _count("status = 'LOST' AND closed_at >= ?", (since,))
-    not_target = await _count("status = 'NOT_TARGET' AND closed_at >= ?", (since,))
+    new = await _count("new", (since,))
+    claimed = await _count("claimed", (since,))
+    contacted = await _count("contacted", (since,))
+    replied = await _count("replied", (since,))
+    handed = await _count("handed", (since,))
+    won = await _count("won", (since,))
+    lost = await _count("lost", (since,))
+    not_target = await _count("not_target", (since,))
     revenue = int(await db.scalar("SELECT COALESCE(SUM(won_amount), 0) FROM leads WHERE status = 'WON' AND closed_at >= ?", (since,)) or 0)
 
     lines = [f"<b>📊 Отчёт за неделю {started} — {ended}</b>", ""]

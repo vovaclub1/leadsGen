@@ -8,9 +8,11 @@ from aiogram.types import CallbackQuery, Message, MessageOriginHiddenUser, Messa
 from app import settings_store as st
 from app.callbacks import LeadCb, MenuCb
 from app.filters import SELLERS
+from app.handlers.helpers import reply as _reply
 from app.keyboards import BUDGETS, NOT_TARGET_REASONS, TIMINGS, budget_kb, confirm_dnc_kb, postpone_kb, reasons_kb, skip_kb, timing_kb
 from app.services import draft_check, leads
 from app.services.ai import ai
+from app.statuses import CLAIMED, CONTACTED, NEW, REPLIED, can
 from app.utils import h, trunc
 
 router = Router(name="leads")
@@ -50,21 +52,10 @@ async def _lead_for(query_or_message, lead_id: int, me: dict, own_only: bool = T
     if not lead:
         await _reply(target, "Лид не найден.")
         return None
-    if own_only and lead["status"] != "NEW" and lead.get("assigned_to") != me["id"] and me["role"] == "sdr":
+    if own_only and lead["status"] != NEW and lead.get("assigned_to") != me["id"] and me["role"] == "sdr":
         await _reply(target, "Этот лид ведёт другой менеджер.")
         return None
     return lead
-
-
-async def _reply(target, text: str, alert: bool = False, **kwargs) -> None:
-    if isinstance(target, CallbackQuery):
-        if alert:
-            await target.answer(text, show_alert=True)
-        else:
-            await target.message.answer(text, **kwargs)
-            await target.answer()
-    else:
-        await target.answer(text, **kwargs)
 
 
 # ---------- создание вручную ----------
@@ -151,7 +142,7 @@ async def open_card(query: CallbackQuery, callback_data: LeadCb, me: dict, state
 @router.callback_query(LeadCb.filter(F.a == "dup"), SELLERS)
 async def duplicate(query: CallbackQuery, callback_data: LeadCb, me: dict) -> None:
     lead = await leads.get(callback_data.id)
-    if not lead or lead["status"] != "NEW":
+    if not lead or lead["status"] != NEW:
         await query.answer("Лид уже не в очереди.", show_alert=True)
         return
     await query.answer(await leads.mark_duplicate(lead, me))
@@ -164,7 +155,7 @@ async def not_target_menu(query: CallbackQuery, callback_data: LeadCb, me: dict)
     lead = await _lead_for(query, callback_data.id, me)
     if not lead:
         return
-    if lead["status"] not in ("NEW", "CLAIMED", "CONTACTED", "REPLIED"):
+    if not can(lead["status"], "nt"):
         await query.answer("На этом этапе закрывает старший.", show_alert=True)
         return
     await query.message.answer(f"Почему лид #{lead['id']} нецелевой?", reply_markup=reasons_kb(lead["id"], "nt"))
@@ -176,7 +167,7 @@ async def not_target_reason(query: CallbackQuery, callback_data: LeadCb, me: dic
     lead = await _lead_for(query, callback_data.id, me)
     if not lead:
         return
-    if lead["status"] not in ("NEW", "CLAIMED", "CONTACTED", "REPLIED"):
+    if not can(lead["status"], "nt"):
         await query.answer("Лид уже закрыт.", show_alert=True)
         return
     label = NOT_TARGET_REASONS.get(callback_data.v, callback_data.v)
@@ -185,7 +176,7 @@ async def not_target_reason(query: CallbackQuery, callback_data: LeadCb, me: dic
     await query.answer()
 
 
-# ---------- просил не писать ----------
+# ---------- просил не п��сать ----------
 
 @router.callback_query(LeadCb.filter(F.a == "dnc"), SELLERS)
 async def dnc_confirm(query: CallbackQuery, callback_data: LeadCb, me: dict) -> None:
@@ -202,7 +193,7 @@ async def dnc_confirm(query: CallbackQuery, callback_data: LeadCb, me: dict) -> 
 @router.callback_query(LeadCb.filter(F.a == "dncok"), SELLERS)
 async def dnc_apply(query: CallbackQuery, callback_data: LeadCb, me: dict) -> None:
     lead = await _lead_for(query, callback_data.id, me)
-    if not lead or lead["status"] not in ("CLAIMED", "CONTACTED", "REPLIED", "NEW"):
+    if not lead or not can(lead["status"], "dnc"):
         await query.answer("Лид уже закрыт.", show_alert=True)
         return
     await query.message.edit_text(await leads.close_dnc(lead, me))
@@ -216,7 +207,7 @@ async def wrote(query: CallbackQuery, callback_data: LeadCb, me: dict, state: FS
     lead = await _lead_for(query, callback_data.id, me)
     if not lead:
         return
-    if lead["status"] != "CLAIMED":
+    if lead["status"] != CLAIMED:
         await query.answer("Контакт уже подтверждён или лид не у вас.", show_alert=True)
         return
     await state.set_state(Proof.contact)
@@ -272,10 +263,10 @@ async def replied(query: CallbackQuery, callback_data: LeadCb, me: dict, state: 
     lead = await _lead_for(query, callback_data.id, me)
     if not lead:
         return
-    if lead["status"] not in ("CONTACTED", "CLAIMED"):
+    if lead["status"] not in (CONTACTED, CLAIMED):
         await query.answer("Ответ уже зафиксирован.", show_alert=True)
         return
-    if lead["status"] == "CLAIMED":
+    if lead["status"] == CLAIMED:
         await query.answer("Сначала подтвердите первый контакт («Написал — подтвердить»).", show_alert=True)
         return
     await state.set_state(Proof.reply)
@@ -288,7 +279,7 @@ async def replied(query: CallbackQuery, callback_data: LeadCb, me: dict, state: 
 async def proof_reply(message: Message, me: dict, state: FSMContext) -> None:
     data = await state.get_data()
     lead = await leads.get(data.get("lead_id", 0))
-    if not lead or lead["status"] != "CONTACTED" or lead.get("assigned_to") != me["id"]:
+    if not lead or lead["status"] != CONTACTED or lead.get("assigned_to") != me["id"]:
         await state.clear()
         await message.answer("Лид уже не в статусе «контакт установлен».")
         return
@@ -310,7 +301,7 @@ async def touch(query: CallbackQuery, callback_data: LeadCb, me: dict) -> None:
     lead = await _lead_for(query, callback_data.id, me)
     if not lead:
         return
-    if lead["status"] != "CONTACTED":
+    if lead["status"] != CONTACTED:
         await query.answer("Касания считаются только в статусе «контакт установлен».", show_alert=True)
         return
     await query.answer(await leads.touch_done(lead, me), show_alert=True)
@@ -399,10 +390,10 @@ async def handoff_start(query: CallbackQuery, callback_data: LeadCb, me: dict, s
     lead = await _lead_for(query, callback_data.id, me)
     if not lead:
         return
-    if lead["status"] not in ("CLAIMED", "CONTACTED", "REPLIED"):
+    if not can(lead["status"], "hand"):
         await query.answer("Лид уже передан или закрыт.", show_alert=True)
         return
-    if lead["status"] == "CLAIMED":
+    if lead["status"] == CLAIMED:
         await query.answer("Сначала подтвердите первый контакт. Передавать без диалога нельзя.", show_alert=True)
         return
     await state.set_state(Handoff.details)
@@ -432,7 +423,7 @@ async def _finish_handoff(state: FSMContext, me: dict, details: str, send) -> No
     data = await state.get_data()
     await state.clear()
     lead = await leads.get(data.get("lead_id", 0))
-    if not lead or lead["status"] not in ("CONTACTED", "REPLIED"):
+    if not lead or lead["status"] not in (CONTACTED, REPLIED):
         await send("Лид уже не в том статусе.")
         return
     note = f"Бюджет: {BUDGETS.get(data.get('budget'), 'не указан')} · Сроки: {TIMINGS.get(data.get('timing'), 'не указаны')}"

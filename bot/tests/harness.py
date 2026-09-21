@@ -204,10 +204,18 @@ async def main():
     print("dnc rows:", dnc_rows)
     assert dnc_rows, "красный список пуст"
 
-    # 7. SDR: лид → взять → проверка → контакт пересылкой
+    # 7. SDR: квиз новичка → лид → взять → проверка → контакт пересылкой
     session.reset()
     await send(dp, bot, SDR, "/start")
     show("SDR /start", session.last(2))
+    from app.handlers.quiz import questions as quiz_questions
+
+    await send(dp, bot, SDR, "/quiz")
+    show("квиз — первый вопрос", session.last(2))
+    for question in await quiz_questions():
+        await send(dp, bot, SDR, str(question["correct"] + 1))
+    show("квиз сдан", session.last(2))
+    assert "Допуск" in session.last(2).text, session.last(2).text
     await send(dp, bot, SDR, "/add @cool_shop_channel")
     show("SDR /add", session.last(2))
     group_card = session.last(GROUP.id)

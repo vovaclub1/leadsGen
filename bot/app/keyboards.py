@@ -180,6 +180,15 @@ def open_kb(lead_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def supervise_kb(lead_id: int, sdr_id: int) -> InlineKeyboardMarkup:
+    """Кнопки надзора за первым сообщением новичка (ТЗ 9.6)."""
+    b = InlineKeyboardBuilder()
+    b.button(text="👍 ок", callback_data=LeadCb(a="supok", id=lead_id, v=str(sdr_id)))
+    b.button(text="✍️ Замечание", callback_data=LeadCb(a="supnote", id=lead_id, v=str(sdr_id)))
+    b.adjust(2)
+    return b.as_markup()
+
+
 def skip_kb(action: str, lead_id: int = 0) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="Пропустить", callback_data=LeadCb(a=action, id=lead_id, v="skip"))
@@ -196,10 +205,11 @@ def admin_root() -> InlineKeyboardMarkup:
     b.button(text="📡 Каналы-доноры", callback_data=AdmCb(s="don"))
     b.button(text="⛔ Чёрный список сущностей", callback_data=AdmCb(s="bl"))
     b.button(text="🤖 ИИ", callback_data=AdmCb(s="ai"))
+    b.button(text="📺 Каналы MORIER", callback_data=AdmCb(s="mch"))
     b.button(text="⚙️ Настройки", callback_data=AdmCb(s="set"))
     b.button(text="📊 Дашборд", callback_data=AdmCb(s="dash"))
     b.button(text="🗓 Отчёт за неделю", callback_data=AdmCb(s="rep"))
-    b.adjust(2, 2, 1, 1, 2, 1)
+    b.adjust(2, 2, 1, 1, 2, 1, 1)
     return b.as_markup()
 
 
@@ -413,4 +423,19 @@ def settings_kb() -> InlineKeyboardMarkup:
     b.button(text="✏️ Изменить параметр", callback_data=AdmCb(s="set", a="edit"))
     b.button(text="⬅️ Назад", callback_data=AdmCb(s="root"))
     b.adjust(1)
+    return b.as_markup()
+
+
+def channels_kb(rows: list[dict]) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="➕ Добавить каналы", callback_data=AdmCb(s="mch", a="add"))
+    b.button(text="⬅️ Назад", callback_data=AdmCb(s="root"))
+    b.adjust(1)
+    return b.as_markup()
+
+
+def channel_item_kb(channel_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="🗑 Удалить", callback_data=AdmCb(s="mch", a="del", id=channel_id))
+    b.button(text="⬅️ К списку", callback_data=AdmCb(s="mch"))
     return b.as_markup()
