@@ -1,0 +1,8 @@
+services:
+  leadhunter:
+    build: .
+    container_name: morier-leadhunter
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/bot/data
