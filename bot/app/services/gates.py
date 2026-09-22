@@ -23,8 +23,6 @@ _SELF_SELLER_RE = re.compile(
     r"продажа рекламы|прода[её]м рекламу|размещение рекламы|прайс|цены на рекламу|buy ads|ad placement|маркет|биржа", re.I
 )
 
-RISK_FLAGS = ("betting", "casino", "crypto", "adult", "vpn")
-
 
 async def our_network() -> dict[str, dict]:
     """Сила нашей сети по вертикалям из morier_channels: max подписчиков, суммарный охват, флаги."""
@@ -83,11 +81,5 @@ async def evaluate(lead: dict) -> tuple[int, list[str]]:
     if _SELF_SELLER_RE.search(about):
         cap = min(cap, CAP_ESTABLISHED)
         reasons.append("канал сам продаёт рекламу")
-
-    # G6: риск-тема, под которую нет инвентаря с нужным флагом.
-    risk = lead.get("risk_topic") or "none"
-    if risk in RISK_FLAGS and (slot is None or risk not in slot["flags"]):
-        cap = min(cap, CAP_REJECT)
-        reasons.append(f"риск-тема «{risk}» — нет наших каналов с таким флагом")
 
     return cap, reasons

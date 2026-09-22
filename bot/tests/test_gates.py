@@ -1,4 +1,4 @@
-"""Проверка гейтов входа: вертикаль, размер, состоявшийся проект, ER, самопродажа, риск.
+"""Проверка гейтов входа: вертикаль, размер, состоявшийся проект, ER, самопродажа.
 
 Запуск:  BOT_TOKEN=1:x OWNER_ID=1 DATA_DIR=/tmp/lh-gates python -m tests.test_gates
 """
@@ -73,24 +73,12 @@ async def main():
     })
     check("сам продаёт -> cap 20", cap == gates.CAP_ESTABLISHED and any("продаёт" in r for r in reasons))
 
-    # G6: риск-тема без инвентаря с флагом.
-    cap, reasons = await gates.evaluate({
-        "vertical": "brawl_stars", "subscribers": 10_000, "avg_views": 2_000, "risk_topic": "betting",
-    })
-    check("риск без флага -> cap 25", cap == gates.CAP_REJECT and any("риск-тема" in r for r in reasons))
-
-    # G6: риск-тема, у нас есть канал с флагом casino, но betting нет.
-    cap, reasons = await gates.evaluate({
-        "vertical": "brawl_stars", "subscribers": 10_000, "avg_views": 2_000, "risk_topic": "casino",
-    })
-    check("риск с флагом -> проходит", cap == 100 and not reasons)
-
     # Комбинация: несколько гейтов сразу — берётся самый строгий потолок.
     cap, reasons = await gates.evaluate({
         "vertical": "brawl_stars", "subscribers": 10_000, "avg_views": 200,
-        "about": "официальный канал", "risk_topic": "betting",
+        "about": "официальный канал",
     })
-    check("комбинация -> min cap 15", cap == gates.CAP_DEAD and len(reasons) == 3)
+    check("комбинация -> min cap 15", cap == gates.CAP_DEAD and len(reasons) == 2)
 
     print("test_gates: все проверки пройдены")
 
