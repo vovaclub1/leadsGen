@@ -9,7 +9,7 @@ from app import runtime
 from app import settings_store as st
 from app.db import db
 from app.keyboards import group_card_kb, private_card_kb, supervise_kb
-from app.services import channels, dnc, enrich, rating, scoring, trustat
+from app.services import channels, dnc, enrich, gates, rating, scoring, trustat
 from app.services.ai import ai, few_shot_examples
 from app.statuses import (
     ACCEPTED, ACTIVE, CLAIMED, CONTACTED, HANDOFF, NEW, REPLIED, STATUS_RU, WON, is_open,
@@ -179,7 +179,11 @@ async def create_lead(
         updates["risk_topic"] = _heuristic_risk(lead.get("about"), lead.get("ad_text"), lead.get("title"))
 
     merged = {**lead, **updates}
+    gate_cap, gate_reasons = await gates.evaluate(merged)
     score = scoring.compute(merged, analysis, ad_count)
+    if gate_reasons:
+        score = min(score, gate_cap)
+        updates["gate_note"] = "; ".join(gate_reasons)
     updates["score"] = score
     updates["category"] = await scoring.category(score)
 
@@ -194,6 +198,8 @@ async def create_lead(
     await update(lead_id, updates)
     lead = await get(lead_id)
     await log_event(lead_id, created_by, "created", source)
+    if gate_reasons:
+        await log_event(lead_id, created_by, "gated", "; ".join(gate_reasons))
     await post_to_group(lead)
     return "created", lead
 
@@ -263,6 +269,8 @@ def render_card(lead: dict, mode: str = "group", assignee: dict | None = None, r
     if lead.get("vertical"):
         lines.append(f"Вертикаль: {VERTICAL_RU.get(lead['vertical'], lead['vertical'])}")
     lines.append("Источник: " + source_line(lead))
+    if lead.get("gate_note"):
+        lines.append(f"Гейты: {h(trunc(lead['gate_note'], 200))}")
     if data.get("why"):
         lines.append(f"Почему клиент: {h(data['why'])}")
     elif lead.get("about"):
@@ -468,7 +476,7 @@ async def set_replied(lead: dict, me: dict, reply_text: str | None) -> str:
     points = await rating.add(me["id"], "replied", lead["id"])
     fresh = await get(lead["id"])
     await update_group_card(fresh, f"💬 Клиент ответил · {mention(me)}")
-    return f"💬 Ответ зафиксирован, +{points} баллов. Квалифицируйте (бюджет, что хочет, когда) и передавайте старшему."
+    return f"💬 Ответ зафиксирован, +{points} баллов. К��алифицируйте (бюджет, что хочет, когда) и передавайте старшему."
 
 
 async def touch_done(lead: dict, me: dict) -> str:

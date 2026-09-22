@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS leads (
   score INTEGER NOT NULL DEFAULT 0,
   category TEXT NOT NULL DEFAULT 'cold',
   risk_topic TEXT NOT NULL DEFAULT 'none',
+  gate_note TEXT,
   contact_username TEXT,
   contact_user_id INTEGER,
   contact_state TEXT NOT NULL DEFAULT 'ok',

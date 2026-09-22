@@ -15,9 +15,11 @@ MIGRATIONS: tuple[tuple[str, str, str, str | None], ...] = (
     ("ad_posts", "image_note", "TEXT", None),
     # Квиз новичка (ТЗ 9.6): уже работающим сотрудникам допуск выдан задним числом,
     # новые SDR проходят квиз с нуля.
-    ("users", "quiz_passed", "INTEGER NOT NULL DEFAULT 0", "UPDATE users SET quiz_passed = 1"),
-    ("users", "quiz_at", "TEXT", None),
-)
+  ("users", "quiz_passed", "INTEGER NOT NULL DEFAULT 0", "UPDATE users SET quiz_passed = 1"),
+  ("users", "quiz_at", "TEXT", None),
+  # Гейты входа: причины понижения скоринга — в карточке и аналитике.
+  ("leads", "gate_note", "TEXT", None),
+  )
 
 
 class Database:

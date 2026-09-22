@@ -28,6 +28,10 @@ DEFAULTS: dict[str, str] = {
     "senior_sla_hours": "2",
     "supervised_leads": "5",
     "quiz_questions": "",
+    "gate_size_ratio": "2",
+    "gate_max_subs": "500000",
+    "gate_min_er": "8",
+    "gate_strict_vertical": "on",
 }
 
 LABELS: dict[str, str] = {
@@ -58,6 +62,10 @@ LABELS: dict[str, str] = {
     "senior_sla_hours": "SLA принятия передачи старшим, часов",
     "supervised_leads": "Первые N лидов новичка под надзором старшего",
     "quiz_questions": "Вопросы квиза новичка (JSON; пусто — встроенные)",
+    "gate_size_ratio": "Гейт размера: reject при подписчиках > лидер сети x N",
+    "gate_max_subs": "Гейт размера: абсолютный потолок подписчиков",
+    "gate_min_er": "Гейт живости: минимальный ER (просмотры/подписчики), %",
+    "gate_strict_vertical": "Гейт вертикали: только вертикали с нашим инвентарём (on/off)",
 }
 
 _cache: dict[str, str] = {}

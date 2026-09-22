@@ -36,7 +36,7 @@ jobs:
           OWNER_ID: '1'
           AI_API_KEY: 'sk-test'
         run: |
-          for suite in harness test_services test_trustat test_ai test_growth; do
+          for suite in harness test_services test_trustat test_ai test_growth test_gates; do
             echo "::group::$suite"
             DATA_DIR="$RUNNER_TEMP/$suite" python -m "tests.$suite"
             echo "::endgroup::"
