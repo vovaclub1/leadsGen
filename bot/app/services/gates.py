@@ -18,10 +18,6 @@ CAP_DEAD = 15
 _ESTABLISHED_RE = re.compile(
     r"официальн|official|студия|studio|релиз|released|издател|publisher|сиквел|франшиз", re.I
 )
-# G5: канал сам продаёт рекламу — конкурент или медиасеть, не покупатель.
-_SELF_SELLER_RE = re.compile(
-    r"продажа рекламы|прода[её]м рекламу|размещение рекламы|прайс|цены на рекламу|buy ads|ad placement|маркет|биржа", re.I
-)
 
 
 async def our_network() -> dict[str, dict]:
@@ -76,10 +72,5 @@ async def evaluate(lead: dict) -> tuple[int, list[str]]:
     if subs >= 1000 and views and views / subs * 100 < min_er:
         cap = min(cap, CAP_DEAD)
         reasons.append(f"ER {views / subs * 100:.1f}% ниже порога {min_er:g}%")
-
-    # G5: канал сам продаёт рекламу.
-    if _SELF_SELLER_RE.search(about):
-        cap = min(cap, CAP_ESTABLISHED)
-        reasons.append("канал сам продаёт рекламу")
 
     return cap, reasons

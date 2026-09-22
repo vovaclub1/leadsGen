@@ -1,4 +1,4 @@
-"""Проверка гейтов входа: вертикаль, размер, состоявшийся проект, ER, самопродажа.
+"""Проверка гейтов входа: вертикаль, размер, состоявшийся проект, ER.
 
 Запуск:  BOT_TOKEN=1:x OWNER_ID=1 DATA_DIR=/tmp/lh-gates python -m tests.test_gates
 """
@@ -65,13 +65,6 @@ async def main():
     # G4: маленький канал (<1000) не проверяется по ER.
     cap, reasons = await gates.evaluate({"vertical": "brawl_stars", "subscribers": 500, "avg_views": 5})
     check("мелкий без ER-гейта", cap == 100 and not reasons)
-
-    # G5: канал сам продаёт рекламу.
-    cap, reasons = await gates.evaluate({
-        "vertical": "brawl_stars", "subscribers": 10_000, "avg_views": 2_000,
-        "ad_text": "Прайс на размещение рекламы в канале",
-    })
-    check("сам продаёт -> cap 20", cap == gates.CAP_ESTABLISHED and any("продаёт" in r for r in reasons))
 
     # Комбинация: несколько гейтов сразу — берётся самый строгий потолок.
     cap, reasons = await gates.evaluate({
