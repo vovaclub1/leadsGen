@@ -47,8 +47,8 @@ async def main():
     cap, reasons = await gates.evaluate({"vertical": "brawl_stars", "subscribers": 100_000, "avg_views": 20_000})
     check("на границе x2 -> проходит", cap == 100 and not reasons)
 
-    # G2: абсолютный потолок 500k.
-    cap, reasons = await gates.evaluate({"vertical": "brawl_stars", "subscribers": 600_000, "avg_views": 90_000})
+    # G2: абсолютный потолок 5M (реальные лидеры сети — до 3,4M, потолок только для мега-каналов).
+    cap, reasons = await gates.evaluate({"vertical": "brawl_stars", "subscribers": 6_000_000, "avg_views": 900_000})
     check("абсолютный потолок -> cap 25", cap == gates.CAP_REJECT and any("потолка" in r for r in reasons))
 
     # G3: состоявшийся проект.

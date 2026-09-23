@@ -29,7 +29,7 @@ DEFAULTS: dict[str, str] = {
     "supervised_leads": "5",
     "quiz_questions": "",
     "gate_size_ratio": "2",
-    "gate_max_subs": "500000",
+    "gate_max_subs": "5000000",
     "gate_min_er": "8",
     "gate_strict_vertical": "on",
 }
