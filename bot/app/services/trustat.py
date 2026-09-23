@@ -155,14 +155,14 @@ async def channels_batch(channel_ids: list[int], priority: bool = False):
     return await request("stat", "/channels/batch", params={"ids": ids}, priority=priority)
 
 
-async def posts_search(query: str, since_ts: int, key_id: int, limit: int = 50, cursor: str | None = None):
+async def posts_search(query: str, since_ts: int, key_id: int | None = None, limit: int = 50, cursor: str | None = None):
     """Поиск публикаций. Тарифицируется как 1 запрос, уникальные каналы не списываются."""
     params = {
         "q": query,
         "since_ts": since_ts,
         "limit": min(limit, 100),  # потолок страницы в API — 100
         "hide_forwards": "true",
-        "peer_type": "all",  # спрос на рекламу чаще пишут в чатах-барахолках, а не в каналах
+        "peer_type": "all",  # спрос на рекламу чаще пишут в чатах-бар��холках, а не в каналах
         "sort": "date",
         "order": "desc",
     }

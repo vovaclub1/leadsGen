@@ -150,6 +150,39 @@ async def main() -> None:
     fallback = [r["username"] for r in await db.fetchall("SELECT username FROM leads")]
     check("при отказе батча берём ссылку из текста", created == 1 and fallback == ["backup_lead"], (created, fallback))
 
+    # --- голый @упоминание в тексте — тоже контакт ---
+    await keypool.set_status(key_id, "active")  # 426 из прошлого сценария исчерпал ключ
+    await db.execute("UPDATE api_keys SET used_month = 0 WHERE id = ?", (key_id,))
+    await db.execute("DELETE FROM leads")
+    await db.execute("UPDATE keywords SET last_run = NULL WHERE id = 1")
+    ROUTES["/posts/search"] = [Reply(200, envelope({"posts": [
+        {"channel_id": 444, "text": "Ищу каналы для посевов, предложения @game_studio"},
+    ]}))]
+    row = await db.fetchone("SELECT * FROM keywords WHERE id = 1")
+    created = await search_poller.run_keyword(row)
+    fallback = [r["username"] for r in await db.fetchall("SELECT username FROM leads")]
+    check("голый @username вытаскивается из текста", created == 1 and fallback == ["game_studio"], (created, fallback))
+
+    # --- пагинация: вторая страница не теряется ---
+    await keypool.set_status(key_id, "active")
+    await db.execute("UPDATE api_keys SET used_month = 0 WHERE id = ?", (key_id,))
+    await db.execute("DELETE FROM leads")
+    await db.execute("UPDATE keywords SET last_run = NULL WHERE id = 1")
+    ROUTES["/posts/search"] = [
+        Reply(200, envelope({"posts": [{"channel_id": 551, "text": "страница один"}], "next_cursor": "page2"})),
+        Reply(200, envelope({"posts": [{"channel_id": 552, "text": "страница два"}], "next_cursor": None})),
+    ]
+    ROUTES["/channels/batch"] = [Reply(200, envelope({"channels": [
+        {"channel_id": 551, "username": "lead_p1"},
+        {"channel_id": 552, "username": "lead_p2"},
+    ]}))]
+    row = await db.fetchone("SELECT * FROM keywords WHERE id = 1")
+    created = await search_poller.run_keyword(row)
+    pages = [p for path, p in CALLS if path == "/posts/search"][-2:]  # CALLS копится с начала файла
+    names = sorted(r["username"] for r in await db.fetchall("SELECT username FROM leads"))
+    check("обе страницы выдачи обработаны", created == 2 and names == ["lead_p1", "lead_p2"], (created, names))
+    check("курсор передан во второй запрос", len(pages) == 2 and pages[1].get("cursor") == "page2", pages)
+
     # --- usage/info: строки, а не числа ---
     ROUTES["/usage/info"] = [Reply(200, envelope({
         "plan": "pro", "period": "2026-09", "spent_requests": "120/500",

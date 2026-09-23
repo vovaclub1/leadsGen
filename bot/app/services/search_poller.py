@@ -10,14 +10,16 @@ from app.utils import now_iso, now_utc, parse_iso
 log = logging.getLogger(__name__)
 
 LINK_RE = re.compile(r"t\.me/(?!c/|joinchat|\+)([A-Za-z][A-Za-z0-9_]{3,31})", re.I)
-RUN_EVERY = timedelta(days=2)
+# Контакты в постах спроса чаще пишут голым @username, а не ссылкой t.me.
+MENTION_RE = re.compile(r"(?<![\w@])@([A-Za-z][A-Za-z0-9_]{4,31})")
+# Спрос протухает за часы: раз в 2 дня лид уже остыл. Плюс страницы выдачи — без них
+# популярное слово теряло всё, что не влезло в первые 50 постов.
+RUN_EVERY = timedelta(hours=6)
+PAGE_LIMIT = 3
 
 
 async def run_due() -> int:
-    rows = await db.fetchall(
-        "SELECT k.*, a.status AS key_status FROM keywords k JOIN api_keys a ON a.id = k.api_key_id "
-        "WHERE k.active = 1 AND a.status = 'active'"
-    )
+    rows = await db.fetchall("SELECT * FROM keywords WHERE active = 1")
     created = 0
     for row in rows:
         last_run = parse_iso(row["last_run"])
@@ -31,14 +33,19 @@ async def run_keyword(row: dict) -> int:
     from app.services import leads
 
     since = parse_iso(row["last_run"]) or (now_utc() - timedelta(days=3))
-    payload, error = await trustat.posts_search(row["word"], int(since.timestamp()), key_id=row["api_key_id"])
-    if payload is None:
-        log.info("Search «%s»: %s", row["word"], error)
-        if error in ("quota", "banned"):
-            await db.execute("UPDATE keywords SET last_run = ? WHERE id = ?", (now_iso(), row["id"]))
-        return 0
+    posts: list[dict] = []
+    cursor: str | None = None
+    for _ in range(PAGE_LIMIT):
+        payload, error = await trustat.posts_search(row["word"], int(since.timestamp()), cursor=cursor)
+        if payload is None:
+            log.info("Search «%s»: %s", row["word"], error)
+            # last_run не двигаем: через полчаса попробуем снова — уже другим ключом из пула.
+            return 0
+        posts.extend(payload.get("posts") or [])
+        cursor = payload.get("next_cursor")
+        if not cursor:
+            break
 
-    posts = payload.get("posts") or []
     created = 0
     for username, text in await _authors(posts):
         ref = leads.parse_ref("@" + username)
@@ -57,7 +64,8 @@ async def _authors(posts: list[dict]) -> list[tuple[str, str | None]]:
 
     Тот, кто написал «ищу каналы для рекламы», и есть наш лид. В выдаче поиска приходит только
     числовой channel_id, поэтому имена берём одним батч-запросом на все каналы сразу, а не поштучно.
-    Если батч недоступен (нет ключа с пакетом Stat или кончилась квота), вытаскиваем ссылки из текста.
+    Если батч недоступен (нет ключа с пакетом Stat или кончилась квота), вытаскиваем контакт из
+    текста поста: сначала ссылки t.me, затем голые @упоминания.
     """
     texts: dict[int, str | None] = {}
     for post in posts:
@@ -81,9 +89,11 @@ async def _authors(posts: list[dict]) -> list[tuple[str, str | None]]:
 
     if not out:
         for post in posts:
-            for username in LINK_RE.findall(post.get("text") or ""):
+            text = post.get("text") or ""
+            # Сначала явные ссылки t.me, затем голые @упоминания — контакт рекламодателя.
+            for username in LINK_RE.findall(text) + MENTION_RE.findall(text):
                 if username.lower() in seen:
                     continue
                 seen.add(username.lower())
-                out.append((username, post.get("text")))
+                out.append((username, text))
     return out
