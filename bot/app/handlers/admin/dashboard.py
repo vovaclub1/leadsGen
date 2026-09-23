@@ -14,6 +14,7 @@ from app.keyboards import admin_root, back_kb
 from app.services import keypool, leads, report
 from app.services.ai import ai
 from app.services.scanner import scanner
+from app.statuses import ACTIVE
 from app.utils import h, in_days
 
 router = Router(name="admin-dashboard")
@@ -23,7 +24,9 @@ async def root_text() -> str:
     users = await db.scalar("SELECT COUNT(*) FROM users WHERE status = 'active'") or 0
     pool = await keypool.pool_summary()
     queue_size = await db.scalar("SELECT COUNT(*) FROM leads WHERE status = 'NEW'") or 0
-    active = await db.scalar("SELECT COUNT(*) FROM leads WHERE status IN ('CLAIMED','CONTACTED','REPLIED','HANDOFF','ACCEPTED')") or 0
+    active = await db.scalar(
+        f"SELECT COUNT(*) FROM leads WHERE status IN ({','.join('?' * len(ACTIVE))})", ACTIVE
+    ) or 0
     donors = await db.scalar("SELECT COUNT(*) FROM donors WHERE active = 1") or 0
     scanner_state = "работает" if scanner.client else ("нет сессии — python login_scanner.py" if scanner.configured else "выключен")
     return (

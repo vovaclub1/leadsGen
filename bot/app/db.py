@@ -19,6 +19,13 @@ MIGRATIONS: tuple[tuple[str, str, str, str | None], ...] = (
   ("users", "quiz_at", "TEXT", None),
   # Гейты входа: причины понижения скоринга — в карточке и аналитике.
   ("leads", "gate_note", "TEXT", None),
+  # ТЗ 9.2: 3 освобождения по таймеру за неделю → лимит активных лидов 1 на 3 дня.
+  ("users", "restricted_until", "TEXT", None),
+  # ТЗ 4.1: реальный охват рекламного поста — просмотры, перечитанные через 24 и 48 ч.
+  ("ad_posts", "views_24h", "INTEGER", None),
+  ("ad_posts", "views_48h", "INTEGER", None),
+  # ТЗ 4.1/8: последние размещения клиента с реальным охватом — в карточку передачи старшему.
+  ("leads", "reach_note", "TEXT", None),
   )
 
 

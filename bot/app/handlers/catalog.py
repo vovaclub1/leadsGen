@@ -5,8 +5,11 @@ from aiogram.types import Message
 
 from app.filters import SELLERS
 from app.services import channels, leads
+from app.utils import now_utc, parse_iso
 
 router = Router(name="catalog")
+
+STALE_DAYS = 14
 
 # Обратная карта: «Brawl Stars» → brawl. Живёт здесь, а не в services/channels,
 # чтобы сервис не тянул зависимости жизненного цикла лидов.
@@ -54,8 +57,14 @@ async def price(message: Message, command: CommandObject) -> None:
     if not rng:
         await message.answer("Вилка ещё не задана: в каталоге вертикали нет каналов с ценой.")
         return
-    await message.answer(
+    lo, hi, oldest = rng
+    text = (
         f"<b>Разрешённая вилка · {leads.VERTICAL_RU.get(vertical, vertical)}</b>\n"
-        f"{rng[0]:,} – {rng[1]:,} ₽".replace(",", " ")
+        f"{lo:,} – {hi:,} ₽".replace(",", " ")
         + "\nЭто диапазон из каталога, а не точная цена. Точную цифру называет старший после проверки — SDR цену не называет."
     )
+    oldest_at = parse_iso(oldest) if oldest else None
+    stale_days = (now_utc() - oldest_at).days if oldest_at else None
+    if stale_days is not None and stale_days >= STALE_DAYS:
+        text += f"\n⚠️ Статистика каналов не обновлялась {stale_days} дн. — вилка может быть неактуальна, уточните у старшего."
+    await message.answer(text)

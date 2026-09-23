@@ -2,12 +2,16 @@ from app.db import db
 from app.utils import now_iso, parse_iso, season
 
 POINTS = {
-    "contact": 10,
+    "contact_30": 10,
+    "contact_2h": 5,
+    "personal_fact": 3,
+    "touch_on_time": 2,
     "replied": 15,
     "accepted": 25,
     "won": 50,
     "won_repeat": 30,
     "not_target": 1,
+    "duplicate": 1,
     "dnc_honest": 2,
     "timer": -5,
     "wrote_red": -15,
@@ -15,12 +19,16 @@ POINTS = {
 }
 
 REASON_RU = {
-    "contact": "первый контакт подтверждён",
+    "contact_30": "первый контакт подтверждён ≤ 30 мин",
+    "contact_2h": "первый контакт подтверждён ≤ 2 ч",
+    "personal_fact": "персональный факт в первом сообщении",
+    "touch_on_time": "касание сделано в срок",
     "replied": "клиент ответил",
     "accepted": "лид принят старшим",
     "won": "сделка закрыта",
     "won_repeat": "повторная сделка с тем же клиентом",
     "not_target": "верно отмечен нецелевой",
+    "duplicate": "верно отмечен дубликат",
     "dnc_honest": "честно отметил «просил не писать»",
     "timer": "лид освобождён по таймеру",
     "wrote_red": "написал контакту из красного списка",

@@ -204,7 +204,7 @@ async def adjust(message: Message, command: CommandObject) -> None:
     if not target:
         await message.answer("Сотрудник с таким username не найден среди добавленных.")
         return
-    await rating.add(target["id"], "manual", created_by=message.from_user.id, delta=delta, note=reason)
+    await rating.add(target["id"], "adjust", created_by=message.from_user.id, delta=delta, note=reason)
     await leads.dm(target["id"], f"Владелец скорректировал ваши баллы: {delta:+d} — {h(reason)}")
     await message.answer(f"{mention(target)}: {delta:+d}. Итого за сезон: {await rating.total(target['id'])}")
 

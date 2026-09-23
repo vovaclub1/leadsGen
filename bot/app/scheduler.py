@@ -9,7 +9,7 @@ from app import settings_store as st
 from app.config import config
 from app.db import db
 from app.keyboards import open_kb, touch_kb
-from app.services import dnc, leads, rating, report, search_poller
+from app.services import dnc, keypool, leads, rating, report, search_poller
 from app.services.ai import ai
 from app.services.scanner import scanner
 from app.statuses import CLAIMED, CONTACTED, REPLIED
@@ -21,7 +21,10 @@ log = logging.getLogger(__name__)
 async def scheduler_loop() -> None:
     await asyncio.sleep(5)
     while True:
-        for job in (sla_jobs, senior_sla_jobs, cadence_jobs, aging_jobs, dnc_jobs, daily_jobs, search_job, ai_health_job):
+        for job in (
+            sla_jobs, senior_sla_jobs, cadence_jobs, cadence_escalation_jobs, aging_jobs, dnc_jobs,
+            daily_jobs, search_job, ai_health_job, key_pool_job, reach_recheck_job,
+        ):
             try:
                 await job()
             except Exception as exc:  # noqa: BLE001 — один упавший job не должен останавливать остальные
@@ -110,6 +113,40 @@ async def cadence_jobs() -> None:
             f"Клиент молчит с {fmt_time(lead['contacted_at'], with_date=True)}. Напишите второй раз — коротко, с новой пользой, без «напоминаю о себе».",
             reply_markup=touch_kb(lead["id"]),
         )
+
+
+async def cadence_escalation_jobs() -> None:
+    """ТЗ 7.2: просроченное касание > 48 ч — «зависший» лид старшему; > 5 дней — лид возвращается в очередь."""
+    stall_hours = 48
+    requeue_days = 5
+
+    stalled = await db.fetchall(
+        "SELECT * FROM leads WHERE status = 'CONTACTED' AND next_touch_at IS NOT NULL AND next_touch_at <= ? "
+        "AND aging_flags NOT LIKE '%stall%'",
+        (in_minutes(-stall_hours * 60),),
+    )
+    for lead in stalled:
+        await db.execute("UPDATE leads SET aging_flags = aging_flags || 'stall,' WHERE id = ?", (lead["id"],))
+        sdr = await leads.user(lead.get("assigned_to"))
+        for senior in await leads.seniors():
+            await leads.dm(
+                senior["id"],
+                f"🕒 Лид #{lead['id']} «{h(lead['title'])}» зависший: касание просрочено > {stall_hours} ч у {mention(sdr)}.",
+                reply_markup=open_kb(lead["id"]),
+            )
+
+    expired = await db.fetchall(
+        "SELECT * FROM leads WHERE status = 'CONTACTED' AND next_touch_at IS NOT NULL AND next_touch_at <= ?",
+        (in_days(-requeue_days),),
+    )
+    for lead in expired:
+        sdr_id = lead.get("assigned_to")
+        await leads.update(lead["id"], {
+            "status": "NEW", "assigned_to": None, "next_touch_at": None, "touch_count": 0, "aging_flags": "",
+        })
+        await leads.log_event(lead["id"], sdr_id, "requeued", f"{requeue_days}d без касания")
+        await leads.dm(sdr_id, f"↩️ Лид #{lead['id']} «{h(lead['title'])}» вернулся в очередь: {requeue_days} дней без касания.")
+        await leads.post_to_group(await leads.get(lead["id"]))
 
 
 # ---------- старение очереди ----------
@@ -336,3 +373,36 @@ async def search_job() -> None:
     created = await search_poller.run_due()
     if created:
         log.info("Поиск по ключевым словам дал %s новых лидов", created)
+
+
+# ---------- пул API-ключей ----------
+
+_key_pool_alerted_at: str = ""
+
+
+async def key_pool_job() -> None:
+    """ТЗ 2.1a: уведомление владельцу при остатке пула < 20% и за 3 дня до исчерпания по темпу."""
+    global _key_pool_alerted_at
+    alerts = await keypool.low_quota_alerts()
+    if not alerts:
+        return
+    key = f"{season()}:{day_key()}"
+    if _key_pool_alerted_at == key:
+        return
+    _key_pool_alerted_at = key
+    await _tell_owners("\n".join(alerts))
+
+
+# ---------- реальный охват размещений (ТЗ 4.1) ----------
+
+_last_reach_check: float = 0.0
+
+
+async def reach_recheck_job() -> None:
+    """Просмотры рекламного поста перечитываются через 24 и 48 ч — реальный охват, а не заявленный."""
+    global _last_reach_check
+    now_ts = local_now().timestamp()
+    if now_ts - _last_reach_check < 1800:
+        return
+    _last_reach_check = now_ts
+    await scanner.recheck_views()

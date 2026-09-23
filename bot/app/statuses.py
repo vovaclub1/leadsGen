@@ -8,6 +8,7 @@ NEW = "NEW"
 CLAIMED = "CLAIMED"
 CONTACTED = "CONTACTED"
 REPLIED = "REPLIED"
+POSTPONED = "POSTPONED"
 HANDOFF = "HANDOFF"
 ACCEPTED = "ACCEPTED"
 WON = "WON"
@@ -16,7 +17,9 @@ NOT_TARGET = "NOT_TARGET"
 DUPLICATE = "DUPLICATE"
 ARCHIVED = "ARCHIVED"
 
-ACTIVE = (CLAIMED, CONTACTED, REPLIED, HANDOFF, ACCEPTED)
+# POSTPONED (ТЗ 7.2) — каденция касаний исчерпана (4-е касание сделано, клиент молчит), лид всё ещё
+# на SDR, но бот больше не напоминает сам: нужно закрыть нецелевым или передать старшему с пометкой «молчит».
+ACTIVE = (CLAIMED, CONTACTED, REPLIED, POSTPONED, HANDOFF, ACCEPTED)
 OPEN = (NEW,) + ACTIVE
 CLOSED = (WON, LOST, NOT_TARGET, DUPLICATE, ARCHIVED)
 
@@ -25,6 +28,7 @@ STATUS_RU = {
     CLAIMED: "Взят, ждёт первого контакта",
     CONTACTED: "Контакт установлен",
     REPLIED: "Клиент ответил",
+    POSTPONED: "Каденция исчерпана — клиент молчит",
     HANDOFF: "Передан старшему",
     ACCEPTED: "В работе у старшего",
     WON: "Сделка закрыта",
@@ -40,6 +44,7 @@ ACTIONS: dict[str, frozenset[str]] = {
     CLAIMED: frozenset({"wrote", "chk", "dnc", "nt", "hand", "note"}),
     CONTACTED: frozenset({"replied", "touch", "post", "chk", "dnc", "nt", "hand", "note"}),
     REPLIED: frozenset({"hand", "chk", "post", "dnc", "nt", "note"}),
+    POSTPONED: frozenset({"hand", "dnc", "nt", "note"}),
     HANDOFF: frozenset({"note"}),
     ACCEPTED: frozenset({"note"}),
     WON: frozenset(),

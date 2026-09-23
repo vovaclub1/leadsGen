@@ -9,10 +9,10 @@ from app import settings_store as st
 from app.callbacks import LeadCb, MenuCb
 from app.filters import SELLERS
 from app.handlers.helpers import reply as _reply
-from app.keyboards import BUDGETS, NOT_TARGET_REASONS, TIMINGS, budget_kb, confirm_dnc_kb, postpone_kb, reasons_kb, skip_kb, timing_kb
-from app.services import draft_check, leads
+from app.keyboards import BUDGETS, NOT_TARGET_REASONS, TIMINGS, budget_kb, confirm_dnc_kb, postpone_kb, reasons_kb, timing_kb
+from app.services import draft_check, leads, rating
 from app.services.ai import ai
-from app.statuses import CLAIMED, CONTACTED, NEW, REPLIED, can
+from app.statuses import CLAIMED, CONTACTED, NEW, POSTPONED, REPLIED, can
 from app.utils import h, trunc
 
 router = Router(name="leads")
@@ -247,7 +247,11 @@ async def proof_contact(message: Message, me: dict, state: FSMContext) -> None:
         return
     await state.clear()
     note = await leads.set_contacted(lead, me, text)
-    issues, _ = await draft_check.check(text, lead)
+    issues, good = await draft_check.check(text, lead)
+    # ТЗ 9.2: персонализированный факт в первом сообщении (ИИ/эвристический чек) — +3.
+    if "Есть привязка к клиенту." in good:
+        bonus = await rating.add(me["id"], "personal_fact", lead["id"])
+        note += f"\n+{bonus} за персональный факт в первом сообщении."
     if issues:
         note += "\n\nЧто подтянуть в следующий раз:\n• " + "\n• ".join(issues[:3])
     if isinstance(message.forward_origin, MessageOriginHiddenUser):
@@ -413,8 +417,8 @@ async def handoff_budget(query: CallbackQuery, callback_data: LeadCb, state: FSM
 async def handoff_timing(query: CallbackQuery, callback_data: LeadCb, state: FSMContext) -> None:
     await state.update_data(timing=callback_data.v)
     await query.message.edit_text(
-        f"Сроки: {TIMINGS.get(callback_data.v, '?')}.\nТеперь одним сообщением: что клиент хочет, какие каналы обсуждали, возражения. Это увидит старший.",
-        reply_markup=skip_kb("handskip", callback_data.id),
+        f"Сроки: {TIMINGS.get(callback_data.v, '?')}.\nТеперь одним сообщением: что клиент хочет, какие каналы обсуждали, "
+        "возражения. Без деталей передать нельзя — это увидит старший."
     )
     await query.answer()
 
@@ -423,26 +427,23 @@ async def _finish_handoff(state: FSMContext, me: dict, details: str, send) -> No
     data = await state.get_data()
     await state.clear()
     lead = await leads.get(data.get("lead_id", 0))
-    if not lead or lead["status"] not in (CONTACTED, REPLIED):
+    if not lead or lead["status"] not in (CONTACTED, REPLIED, POSTPONED):
         await send("Лид уже не в том статусе.")
         return
-    note = f"Бюджет: {BUDGETS.get(data.get('budget'), 'не указан')} · Сроки: {TIMINGS.get(data.get('timing'), 'не указаны')}"
-    if details:
-        note += f"\n{trunc(details, 800)}"
+    note = f"Бюджет: {BUDGETS.get(data.get('budget'), 'не указан')} · Сроки: {TIMINGS.get(data.get('timing'), 'не указаны')}\n{trunc(details, 800)}"
     await send(await leads.handoff(lead, me, note))
 
 
 @router.message(Handoff.details, SELLERS, F.text)
 async def handoff_details(message: Message, me: dict, state: FSMContext) -> None:
-    await _finish_handoff(state, me, message.text, message.answer)
+    text = (message.text or "").strip()
+    if len(text) < 10:
+        # ТЗ 8: «Проверка полноты: без статуса и деталей передать нельзя».
+        await message.answer("Деталей маловато — без них передать нельзя. Опишите короче, что клиент хочет, какие каналы обсуждали, возражения.")
+        return
+    await _finish_handoff(state, me, text, message.answer)
 
 
-@router.callback_query(LeadCb.filter(F.a == "handskip"), SELLERS, Handoff.details)
-async def handoff_skip(query: CallbackQuery, me: dict, state: FSMContext) -> None:
-    await _finish_handoff(state, me, "", query.message.answer)
-    await query.answer()
-
-
-@router.callback_query(LeadCb.filter(F.a.in_({"budget", "timing", "handskip"})))
+@router.callback_query(LeadCb.filter(F.a.in_({"budget", "timing"})))
 async def handoff_stale(query: CallbackQuery) -> None:
     await query.answer("Этот шаг уже неактуален — начните передачу заново с карточки.", show_alert=True)

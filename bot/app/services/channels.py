@@ -44,15 +44,16 @@ async def delete(channel_id: int) -> None:
     await db.execute("DELETE FROM morier_channels WHERE id = ?", (channel_id,))
 
 
-async def price_range(vertical: str) -> tuple[int, int] | None:
-    """Разрешённая вилка по вертикали: от минимальной нижней до максимальной верхней границы."""
+async def price_range(vertical: str) -> tuple[int, int, str | None] | None:
+    """Разрешённая вилка по вертикали (от минимальной нижней до максимальной верхней границы)
+    + дата самой старой статы среди участвующих каналов — чтобы /price мог предупредить об устаревании."""
     row = await db.fetchone(
-        "SELECT MIN(price_from) AS lo, MAX(price_to) AS hi FROM morier_channels "
+        "SELECT MIN(price_from) AS lo, MAX(price_to) AS hi, MIN(stat_updated_at) AS oldest FROM morier_channels "
         "WHERE vertical = ? AND category != 'C' AND price_from IS NOT NULL AND price_from > 0",
         (vertical,),
     )
     if row and row["lo"] and row["hi"] and row["hi"] >= row["lo"]:
-        return int(row["lo"]), int(row["hi"])
+        return int(row["lo"]), int(row["hi"]), row.get("oldest")
     return None
 
 

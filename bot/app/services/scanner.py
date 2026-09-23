@@ -6,7 +6,7 @@ import re
 from app.config import config
 from app.db import db
 from app.services.ai import ai
-from app.utils import now_iso
+from app.utils import in_minutes, now_iso
 
 log = logging.getLogger(__name__)
 
@@ -265,6 +265,30 @@ class Scanner:
             ad_views=getattr(message, "views", None), confidence=confidence, image_note=image_note,
         )
         log.info("Сканер @%s → %s (%s) [%s]", username, ref["entity_key"], status, now_iso())
+
+    async def recheck_views(self) -> None:
+        """ТЗ 4.1: реальный охват рекламного поста — просмотры перечитываются через 24 и 48 ч после публикации."""
+        if not self.client:
+            return
+        await self._recheck_window("views_24h", hours=24)
+        await self._recheck_window("views_48h", hours=48)
+
+    async def _recheck_window(self, column: str, hours: int) -> None:
+        # Джоб идёт раз в ~30 минут — окно в 90 минут гарантирует, что ни один пост не пропустят,
+        # даже если предыдущий запуск задержался.
+        due = await db.fetchall(
+            f"SELECT * FROM ad_posts WHERE {column} IS NULL AND msg_id IS NOT NULL AND donor IS NOT NULL "
+            "AND created_at <= ? AND created_at > ?",
+            (in_minutes(-hours * 60), in_minutes(-hours * 60 - 90)),
+        )
+        for post in due:
+            try:
+                message = await self.client.get_messages(post["donor"], ids=post["msg_id"])
+            except Exception as exc:  # noqa: BLE001
+                log.info("Перечит охвата @%s/%s: %s", post["donor"], post["msg_id"], exc)
+                continue
+            views = getattr(message, "views", None) if message else None
+            await db.execute(f"UPDATE ad_posts SET {column} = ? WHERE id = ?", (views, post["id"]))
 
 
 scanner = Scanner()

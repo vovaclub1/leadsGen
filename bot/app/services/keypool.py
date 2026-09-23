@@ -3,7 +3,7 @@ import logging
 
 from app import security
 from app.db import db
-from app.utils import day_key, now_iso, season
+from app.utils import day_key, local_now, now_iso, season
 
 log = logging.getLogger(__name__)
 
@@ -136,3 +136,26 @@ async def pool_summary() -> dict:
                     summary[scope][0] += month_left
                     summary[scope][1] += key["limit_month"]
     return summary
+
+
+SCOPE_RU = {"stat": "Stat", "search": "Search"}
+
+
+async def low_quota_alerts() -> list[str]:
+    """ТЗ 2.1a: «Уведомление владельцу при остатке пула < 20% и за 3 дня до предполагаемого исчерпания по текущему темпу»."""
+    summary = await pool_summary()
+    days_elapsed = max(1, local_now().day)
+    alerts = []
+    for scope, (left, limit, keys_count) in summary.items():
+        if limit <= 0 or keys_count == 0:
+            continue
+        used = limit - left
+        ratio = left / limit
+        pace_per_day = used / days_elapsed
+        projected_days = left / pace_per_day if pace_per_day > 0 else None
+        label = SCOPE_RU[scope]
+        if ratio < RESERVE_SHARE:
+            alerts.append(f"🔑 Пул {label}: остаток {left} из {limit} ({ratio:.0%}) — ниже резерва 20%. Приоритетные вызовы ещё работают, фоновые — нет.")
+        elif projected_days is not None and projected_days <= 3:
+            alerts.append(f"🔑 Пул {label}: при текущем темпе закончится через ~{projected_days:.1f} дн. Добавьте ключ заранее.")
+    return alerts

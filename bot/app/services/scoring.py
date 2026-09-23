@@ -1,21 +1,19 @@
-"""Скоринг v1 — прозрачные веса. Метки команды накапливаются в БД; модель v2 обучается на них отдельно."""
+"""Скоринг v1 — прозрачные веса. Метки команды накапливаются в БД; модель v2 обучается на них отдельно.
+
+ТЗ 5.5: «Финальный score = 0,6 × правила + 0,4 × ai_score (пока нет модели v2)». Правила считаются
+здесь полностью формулами (_rules_score); ai_score — это score_hint от ИИ-анализа лида. Без ИИ (ключа
+нет, лид не ушёл в анализ) блендить нечего — итог равен чистому правило-скорингу.
+"""
 from app import settings_store as st
 
 
-def compute(lead: dict, ai: dict | None, ad_count: int) -> int:
+def _rules_score(lead: dict, ad_count: int) -> int:
     score = 45
-    if ai:
-        hint = ai.get("score_hint")
-        if isinstance(hint, (int, float)):
-            score = int(hint)
-        if ai.get("is_target") is False:
-            score = min(score, 30)
-        if ai.get("kind") in ("media", "agency", "scam"):
-            score = min(score, 20)
 
     subs = lead.get("subscribers") or 0
-    # Наш покупатель — мелкий и средний проект: крупным мы не нужны (это ловит гейт размера),
-    # поэтому бонус за размер перевёрнут: 5–20k ценнее 20–100k, а 100k+ не получает ничего.
+    # ТЗ 5.5 даёт плоский бонус за 1k–100k подписчиков. Осознанное отклонение: наш покупатель —
+    # мелкий и средний проект (крупным мы не нужны — это дальше ловит гейт размера), поэтому бонус
+    # перевёрнут — 5–20k ценнее 20–100k, а 100k+ не получает ничего. См. README, «Скоринг v1».
     if 5_000 <= subs < 20_000:
         score += 6
     elif 20_000 <= subs < 100_000:
@@ -41,6 +39,26 @@ def compute(lead: dict, ai: dict | None, ad_count: int) -> int:
         score -= 5
 
     return max(0, min(100, score))
+
+
+def compute(lead: dict, ai: dict | None, ad_count: int) -> int:
+    rules = _rules_score(lead, ad_count)
+
+    ai_score = None
+    if ai:
+        hint = ai.get("score_hint")
+        if isinstance(hint, (int, float)):
+            ai_score = max(0, min(100, int(hint)))
+
+    final = round(0.6 * rules + 0.4 * ai_score) if ai_score is not None else rules
+
+    if ai:
+        if ai.get("is_target") is False:
+            final = min(final, 30)
+        if ai.get("kind") in ("media", "agency", "scam"):
+            final = min(final, 20)
+
+    return max(0, min(100, final))
 
 
 async def category(score: int) -> str:

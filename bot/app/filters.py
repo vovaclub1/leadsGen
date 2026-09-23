@@ -13,3 +13,5 @@ class RoleFilter(BaseFilter):
 OWNER = RoleFilter("owner")
 SENIOR_UP = RoleFilter("owner", "senior")
 SELLERS = RoleFilter("owner", "senior", "sdr")
+# Байер смотрит очередь и лиды в режиме просмотра, без права брать (README, раздел «Роли»).
+VIEWERS = RoleFilter("owner", "senior", "sdr", "buyer")

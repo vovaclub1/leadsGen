@@ -27,10 +27,13 @@ TIMINGS = {"now": "Запуск сейчас", "week": "В течение нед
 
 def main_menu(role: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="📋 Очередь", callback_data=MenuCb(a="queue"))
-    b.button(text="🗂 Мои лиды", callback_data=MenuCb(a="my"))
+    # Байер видит очередь и свои лиды в режиме просмотра (без права брать) — раздел 3 README.
+    if role in ("owner", "senior", "sdr", "buyer"):
+        b.button(text="📋 Очередь", callback_data=MenuCb(a="queue"))
+        b.button(text="🗂 Мои лиды", callback_data=MenuCb(a="my"))
+    if role in ("owner", "senior", "sdr"):
+        b.button(text="➕ Добавить лид", callback_data=MenuCb(a="add"))
     b.button(text="🏆 Рейтинг", callback_data=MenuCb(a="top"))
-    b.button(text="➕ Добавить лид", callback_data=MenuCb(a="add"))
     if role in ("owner", "senior"):
         b.button(text="📨 Передачи", callback_data=MenuCb(a="handoffs"))
     if role == "owner":
@@ -93,6 +96,13 @@ def private_card_kb(lead: dict, role: str) -> InlineKeyboardMarkup | None:
         b.button(text="❌ Нецелевой", callback_data=LeadCb(a="nt", id=lid))
         b.button(text="🗒 Заметка", callback_data=LeadCb(a="note", id=lid))
         b.adjust(1, 2, 2, 1)
+        return b.as_markup()
+    if status == "POSTPONED":
+        b.button(text="⬆️ Передать старшему", callback_data=LeadCb(a="hand", id=lid))
+        b.button(text="🚫 Просил не писать", callback_data=LeadCb(a="dnc", id=lid))
+        b.button(text="❌ Нецелевой", callback_data=LeadCb(a="nt", id=lid))
+        b.button(text="🗒 Заметка", callback_data=LeadCb(a="note", id=lid))
+        b.adjust(1, 2, 1)
         return b.as_markup()
     if status == "HANDOFF" and role in ("owner", "senior"):
         return handoff_kb(lid)
@@ -265,6 +275,17 @@ def employee_kb(user: dict, is_self: bool) -> InlineKeyboardMarkup:
             b.button(text="▶️ Вернуть доступ", callback_data=AdmCb(s="emp", a="resume", id=user["id"]))
         b.button(text="🗑 Удалить из бота", callback_data=AdmCb(s="emp", a="del", id=user["id"]))
     b.button(text="⬅️ К списку", callback_data=AdmCb(s="emp"))
+    b.adjust(1)
+    return b.as_markup()
+
+
+def colleague_kb(employee_id: int, colleagues: list[dict], action: str = "pauseto") -> InlineKeyboardMarkup:
+    """Выбор коллеги, которому передать лиды с ответившим клиентом (ТЗ 7.4)."""
+    b = InlineKeyboardBuilder()
+    for row in colleagues:
+        name = f"@{row['username']}" if row.get("username") else (row.get("full_name") or str(row["id"]))
+        b.button(text=f"{ROLE_ICON[row['role']]} {name}", callback_data=AdmCb(s="emp", a=action, id=employee_id, v=str(row["id"])))
+    b.button(text="Отмена", callback_data=AdmCb(s="emp"))
     b.adjust(1)
     return b.as_markup()
 

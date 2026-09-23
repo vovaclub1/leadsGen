@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app import settings_store as st
 from app.callbacks import MenuCb
-from app.filters import OWNER, SELLERS
+from app.filters import OWNER, SELLERS, VIEWERS
 from app.keyboards import ROLE_RU, main_menu, queue_item_kb
 from app.services import dnc, leads, rating
 from app.services.keypool import pool_summary
@@ -26,7 +26,8 @@ def help_text(role: str, sla: int, limit: int) -> str:
         "4. Клиент молчит — бот напомнит о касании (3 → 7 → 7 дней). Ответил — перешлите его ответ («Клиент ответил»).\n"
         "5. Выяснили бюджет, задачу и сроки — «Передать старшему». Принят → +25, сделка → +50.\n"
         "6. Клиент просит не писать — жмите «Просил не писать». Это +2, а не минус. Написать контакту из красного списка — −15.\n\n"
-        "<b>Баллы:</b> контакт +10 · ответ +15 · принят +25 · сделка +50 · повторная сделка +30 · нецелевой +1 · таймер −5 · доработка −3\n"
+        "<b>Баллы:</b> контакт ≤30мин +10 / ≤2ч +5 · персональный факт +3 · касание в срок +2 · ответ +15 · принят без возврата +25 · "
+        "сделка +50 · повторная сделка +30 · нецелевой/дубликат +1 · таймер −5 (3 за неделю — лимит лидов 1 на 3 дня) · доработка −3\n"
         "<b>Команды:</b> /queue /my /me /top /add /check /find /catalog /price /quiz /cancel"
     )
     if role in ("owner", "senior"):
@@ -94,20 +95,21 @@ async def render_queue() -> tuple[str, list[dict]]:
     return f"<b>Очередь ({len(rows)} из топа по скорингу)</b>", rows
 
 
-@router.message(Command("queue"), SELLERS)
-async def queue_cmd(message: Message) -> None:
+@router.message(Command("queue"), VIEWERS)
+async def queue_cmd(message: Message, me: dict) -> None:
     text, rows = await render_queue()
     await message.answer(text)
     for lead in rows:
-        await message.answer(leads.short_line(lead), reply_markup=queue_item_kb(lead["id"]))
+        # Байер видит очередь в режиме просмотра — без кнопки «Беру» (README, раздел «Роли»).
+        await message.answer(leads.short_line(lead), reply_markup=queue_item_kb(lead["id"]) if me["role"] != "buyer" else None)
 
 
-@router.callback_query(MenuCb.filter(F.a == "queue"), SELLERS)
-async def queue_cb(query: CallbackQuery) -> None:
+@router.callback_query(MenuCb.filter(F.a == "queue"), VIEWERS)
+async def queue_cb(query: CallbackQuery, me: dict) -> None:
     text, rows = await render_queue()
     await query.message.answer(text)
     for lead in rows:
-        await query.message.answer(leads.short_line(lead), reply_markup=queue_item_kb(lead["id"]))
+        await query.message.answer(leads.short_line(lead), reply_markup=queue_item_kb(lead["id"]) if me["role"] != "buyer" else None)
     await query.answer()
 
 
@@ -121,12 +123,12 @@ async def render_my(me: dict) -> str:
     return "\n".join(lines)
 
 
-@router.message(Command("my"), SELLERS)
+@router.message(Command("my"), VIEWERS)
 async def my_cmd(message: Message, me: dict) -> None:
     await message.answer(await render_my(me))
 
 
-@router.callback_query(MenuCb.filter(F.a == "my"), SELLERS)
+@router.callback_query(MenuCb.filter(F.a == "my"), VIEWERS)
 async def my_cb(query: CallbackQuery, me: dict) -> None:
     await query.message.answer(await render_my(me))
     await query.answer()

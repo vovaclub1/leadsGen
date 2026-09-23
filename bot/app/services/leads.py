@@ -12,7 +12,7 @@ from app.keyboards import group_card_kb, private_card_kb, supervise_kb
 from app.services import channels, dnc, enrich, gates, rating, scoring, trustat
 from app.services.ai import ai, few_shot_examples
 from app.statuses import (
-    ACCEPTED, ACTIVE, CLAIMED, CONTACTED, HANDOFF, NEW, REPLIED, STATUS_RU, WON, is_open,
+    ACCEPTED, ACTIVE, CLAIMED, CONTACTED, HANDOFF, NEW, POSTPONED, REPLIED, STATUS_RU, WON, is_open,
 )
 from app.utils import fmt_num, fmt_time, h, in_days, in_minutes, mention, minutes_left, now_iso, now_utc, parse_iso, trunc
 
@@ -203,7 +203,7 @@ async def create_lead(
     # В группу попадают только лиды, стоящие очереди: горячие и тёплые от автоматических
     # источников. Холодные остаются в истории (/my, аналитика). Ручной /add — решение
     # живого человека, его карточка в группе всегда. Лид без контакта тоже едет в группу:
-    # разбирать пост и искать связь может только человек.
+    # ра��бирать пост и искать связь может только человек.
     if source == "manual" or lead.get("kind") == "unknown" or lead.get("category") in ("hot", "warm"):
         await post_to_group(lead)
     return "created", lead
@@ -304,6 +304,8 @@ def render_card(lead: dict, mode: str = "group", assignee: dict | None = None, r
             lines.append(f"⏱ Первый контакт до {fmt_time(lead['contact_deadline'])} · осталось {max(0, minutes_left(lead['contact_deadline']))} мин")
         if lead["status"] == CONTACTED and lead.get("next_touch_at"):
             lines.append(f"Следующее касание: {fmt_time(lead['next_touch_at'], with_date=True)} (№{lead['touch_count'] + 1})")
+        if lead["status"] == POSTPONED:
+            lines.append("Каденция закрыта — клиент не ответил на 4 касания. Отметьте «Нецелевой» или передайте старшему с пометкой «молчит».")
         if lead["status"] == CLAIMED and data.get("draft"):
             lines.append(f"\n<b>Черновик первого сообщения</b> — перепишите под себя, шаблоны клиенты чуют:\n<i>{h(data['draft'])}</i>")
         if lead.get("note"):
@@ -313,6 +315,8 @@ def render_card(lead: dict, mode: str = "group", assignee: dict | None = None, r
         lines.append(f"\n<b>Передача от {mention(assignee)}</b>")
         if lead.get("handoff_note"):
             lines.append(h(lead["handoff_note"]))
+        if lead.get("reach_note"):
+            lines.append(h(lead["reach_note"]))
         if lead.get("first_message"):
             lines.append(f"Первое сообщение SDR:\n<i>{h(trunc(lead['first_message'], 400))}</i>")
         if matrix:
@@ -399,8 +403,13 @@ async def claim(lead_id: int, me: dict) -> tuple[bool, str]:
         f"SELECT COUNT(*) FROM leads WHERE assigned_to = ? AND status IN ({','.join('?' * len(ACTIVE))})", (me["id"], *ACTIVE)
     )
     limit = await st.get_int("max_active")
+    restricted_until = parse_iso(me.get("restricted_until"))
+    restricted = bool(restricted_until and now_utc() < restricted_until)
+    if restricted:
+        limit = min(limit, 1)
     if active >= limit:
-        return False, f"У вас {active} активных лидов — лимит {limit}. Закройте или передайте часть."
+        extra = " Лимит снижен из-за упущенных по таймеру лидов на этой неделе." if restricted else ""
+        return False, f"У вас {active} активных лидов — лимит {limit}.{extra} Закройте или передайте часть."
 
     sla = await st.get_int("sla_minutes")
     cursor = await db.execute(
@@ -427,10 +436,19 @@ async def release_by_timer(lead: dict) -> None:
         return
     await log_event(lead["id"], lead["assigned_to"], "released")
     await rating.add(lead["assigned_to"], "timer", lead["id"])
+    # ТЗ 9.2: 3 освобождения по таймеру за неделю → лимит активных лидов 1 на 3 дня.
+    recent_releases = await db.scalar(
+        "SELECT COUNT(*) FROM lead_events WHERE user_id = ? AND type = 'released' AND created_at >= ?",
+        (lead["assigned_to"], in_days(-7)),
+    ) or 0
+    restrict_note = ""
+    if recent_releases >= 3:
+        await db.execute("UPDATE users SET restricted_until = ? WHERE id = ?", (in_days(3), lead["assigned_to"]))
+        restrict_note = f"\n⚠️ Это {recent_releases}-е упущение по таймеру за неделю — лимит активных лидов снижен до 1 на 3 дня."
     await dm(
         lead["assigned_to"],
         f"⏱ Лид #{lead['id']} «{h(lead['title'])}» освобождён: {await st.get_int('sla_minutes')} минут без подтверждённого контакта. "
-        f"−{abs(rating.POINTS['timer'])} баллов. Лид снова в очереди.",
+        f"−{abs(rating.POINTS['timer'])} баллов. Лид снова в очереди.{restrict_note}",
     )
     fresh = await get(lead["id"])
     await update_group_card(fresh, "⏱ Освобождён по таймеру — снова в очереди (см. новую карточку ниже)")
@@ -446,8 +464,16 @@ async def set_contacted(lead: dict, me: dict, first_message: str | None) -> str:
         "touch_count": 1, "next_touch_at": in_days(cadence[0]), "contact_deadline": None,
     })
     await log_event(lead["id"], me["id"], "contacted")
-    points = await rating.add(me["id"], "contact", lead["id"])
-    note = f"✅ Контакт подтверждён, +{points} баллов. Следующее касание через {cadence[0]} дн. — напомню."
+    # ТЗ 9.2: контакт ≤ 30 мин после захвата — +10, ≤ 2 ч — +5, дальше — без бонуса за скорость.
+    claimed_at = parse_iso(lead.get("claimed_at"))
+    elapsed_minutes = (now_utc() - claimed_at).total_seconds() / 60 if claimed_at else None
+    if elapsed_minutes is not None and elapsed_minutes <= 30:
+        points = await rating.add(me["id"], "contact_30", lead["id"])
+    elif elapsed_minutes is not None and elapsed_minutes <= 120:
+        points = await rating.add(me["id"], "contact_2h", lead["id"])
+    else:
+        points = 0
+    note = "✅ Контакт подтверждён" + (f", +{points} баллов" if points else "") + f". Следующее касание через {cadence[0]} дн. — напомню."
     if lead["contact_state"] in ("red", "orange") or (lead["contact_state"] == "yellow" and me["role"] == "sdr"):
         penalty = await rating.add(me["id"], "wrote_red", lead["id"])
         note += f"\n\n⛔ Контакт был в {dnc.LEVEL_SHORT[lead['contact_state']]} списке: {penalty} баллов. Старшие уведомлены."
@@ -489,14 +515,21 @@ async def set_replied(lead: dict, me: dict, reply_text: str | None) -> str:
 async def touch_done(lead: dict, me: dict) -> str:
     cadence = await st.cadence()
     count = lead["touch_count"] + 1
-    if count > len(cadence):
-        await update(lead["id"], {"touch_count": count, "next_touch_at": None})
-        await log_event(lead["id"], me["id"], "touch", str(count))
-        return f"Касание №{count} записано. Каденция исчерпана — если ответа нет, отметьте «Нецелевой» или передайте старшему с пометкой «молчит»."
+    await log_event(lead["id"], me["id"], "touch", str(count))
+    # ТЗ 9.2: касание 2/3/4 сделано в срок (±1 день от запланированного) — +2.
+    scheduled = parse_iso(lead.get("next_touch_at"))
+    on_time = bool(scheduled and abs((now_utc() - scheduled).total_seconds()) <= 86400)
+    bonus = await rating.add(me["id"], "touch_on_time", lead["id"]) if on_time else 0
+    suffix = f" +{bonus} за касание в срок." if bonus else ""
+    if count >= len(cadence) + 1:
+        # Каденция исчерпана (4-е касание сделано) — статус POSTPONED, бот больше не напоминает сам.
+        await update(lead["id"], {"touch_count": count, "next_touch_at": None, "status": POSTPONED})
+        fresh = await get(lead["id"])
+        await update_group_card(fresh, f"⏸ Каденция исчерпана · {mention(me)}")
+        return f"Касание №{count} записано.{suffix} Каденция исчерпана — статус «Отложен»: отметьте «Нецелевой» или передайте старшему с пометкой «молчит»."
     next_days = cadence[min(count - 1, len(cadence) - 1)]
     await update(lead["id"], {"touch_count": count, "next_touch_at": in_days(next_days)})
-    await log_event(lead["id"], me["id"], "touch", str(count))
-    return f"Касание №{count} записано. Следующее — через {next_days} дн."
+    return f"Касание №{count} записано.{suffix} Следующее — через {next_days} дн."
 
 
 async def postpone(lead: dict, me: dict, days: int) -> str:
@@ -546,9 +579,10 @@ async def close_dnc(lead: dict, me: dict) -> str:
 async def mark_duplicate(lead: dict, me: dict) -> str:
     await update(lead["id"], {"status": "DUPLICATE", "closed_at": now_iso()})
     await log_event(lead["id"], me["id"], "duplicate")
+    points = await rating.add(me["id"], "duplicate", lead["id"])
     fresh = await get(lead["id"])
     await update_group_card(fresh, f"♻️ Дубликат · {mention(me)}")
-    return "Отмечен как дубликат."
+    return f"Отмечен как дубликат, +{points}."
 
 
 # ---------- передача старшему ----------
@@ -561,6 +595,18 @@ async def handoff(lead: dict, me: dict, note: str) -> str:
             fields["trustat_json"] = json.dumps(stat, ensure_ascii=False)
         elif error:
             log.info("Trustat для #%s: %s", lead["id"], error)
+    # ТЗ 4.1: 3 последних размещения клиента с реальным охватом (просмотры перечитаны через 24/48ч).
+    recent_posts = await db.fetchall(
+        "SELECT donor, views, views_24h, views_48h FROM ad_posts WHERE advertiser_key = ? ORDER BY created_at DESC LIMIT 3",
+        (lead["entity_key"],),
+    )
+    reach_lines = []
+    for post in recent_posts:
+        reach = post.get("views_48h") or post.get("views_24h") or post.get("views")
+        if reach:
+            reach_lines.append(f"@{post['donor']} — {reach:,} просм.".replace(",", " "))
+    if reach_lines:
+        fields["reach_note"] = "Реальный охват размещений: " + "; ".join(reach_lines)
     await update(lead["id"], fields)
     await log_event(lead["id"], me["id"], "handoff", note)
     fresh = await get(lead["id"])
@@ -574,8 +620,13 @@ async def accept(lead: dict, senior: dict) -> str:
     await update(lead["id"], {"status": "ACCEPTED", "accepted_by": senior["id"], "accepted_at": now_iso()})
     await log_event(lead["id"], senior["id"], "accepted")
     if lead.get("assigned_to"):
-        points = await rating.add(lead["assigned_to"], "accepted", lead["id"])
-        await dm(lead["assigned_to"], f"✅ Старший {mention(senior)} принял лид #{lead['id']} «{h(lead['title'])}». +{points} баллов.")
+        # ТЗ 9.2: +25 только за передачу, принятую БЕЗ возврата на доработку.
+        was_returned = await db.fetchone("SELECT 1 FROM lead_events WHERE lead_id = ? AND type = 'returned'", (lead["id"],))
+        if was_returned:
+            await dm(lead["assigned_to"], f"✅ Старший {mention(senior)} принял лид #{lead['id']} «{h(lead['title'])}» после доработки.")
+        else:
+            points = await rating.add(lead["assigned_to"], "accepted", lead["id"])
+            await dm(lead["assigned_to"], f"✅ Старший {mention(senior)} принял лид #{lead['id']} «{h(lead['title'])}». +{points} баллов.")
     fresh = await get(lead["id"])
     await update_group_card(fresh, f"✅ Принят старшим {mention(senior)}")
     return "Принято. Теперь лид в вашей воронке: WON / LOST на карточке."
