@@ -14,11 +14,11 @@ def compute(lead: dict, ai: dict | None, ad_count: int) -> int:
             score = min(score, 20)
 
     subs = lead.get("subscribers") or 0
-    if subs >= 100_000:
-        score += 10
-    elif subs >= 20_000:
+    # Наш покупатель — мелкий и средний проект: крупным мы не нужны (это ловит гейт размера),
+    # поэтому бонус за размер перевёрнут: 5–20k ценнее 20–100k, а 100k+ не получает ничего.
+    if 5_000 <= subs < 20_000:
         score += 6
-    elif subs >= 5_000:
+    elif 20_000 <= subs < 100_000:
         score += 3
 
     if (lead.get("avg_views") or 0) >= 20_000:

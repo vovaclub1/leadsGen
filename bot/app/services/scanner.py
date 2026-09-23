@@ -246,14 +246,20 @@ class Scanner:
 
         from app.services import leads
 
+        ref = None
         if advertiser:
             ref = leads.parse_ref("@" + advertiser)
-        elif hit["site"]:
+        if ref is None and hit["site"]:
             ref = leads.parse_ref("https://" + hit["site"])
-        else:
-            return
-        if not ref:
-            return
+        if ref is None:
+            # Контакт в посте не найден — лид всё равно создаём: карточка с пометкой «нет
+            # контакта» уедет в группу, SDR откроет пост по ссылке и найдёт связь вручную.
+            # Ключ по посту, а не по донору: каждый такой пост — отдельный неизвестный рекламодатель.
+            ref = {
+                "kind": "unknown", "username": None,
+                "url": f"https://t.me/{username}/{message.id}",
+                "entity_key": f"post:{username.lower()}:{message.id}",
+            }
         status, lead = await leads.create_lead(
             ref, source="scanner", donor=username, ad_text=text, ad_msg_id=message.id,
             ad_views=getattr(message, "views", None), confidence=confidence, image_note=image_note,

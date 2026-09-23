@@ -155,6 +155,10 @@ async def main():
     cat = await scoring.category(score)
     print("ok: score без ИИ:", score, cat)
     assert 0 <= score <= 100 and cat in ("hot", "warm", "cold")
+    small = scoring.compute({**lead, "subscribers": 8000}, None, ad_count=2)
+    big = scoring.compute({**lead, "subscribers": 250000}, None, ad_count=2)
+    assert small > big, (small, big)
+    print("ok: скоринг перевёрнут — мелким и средним бонус", small, ">", big)
     problems, good = await draft_check.check(
         "Здравствуйте! Мы агентство MORIER, предлагаем рекламу от 5000 руб. https://morier.ru https://t.me/x https://x.ru", lead
     )

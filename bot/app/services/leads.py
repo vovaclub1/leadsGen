@@ -202,8 +202,9 @@ async def create_lead(
         await log_event(lead_id, created_by, "gated", "; ".join(gate_reasons))
     # В группу попадают только лиды, стоящие очереди: горячие и тёплые от автоматических
     # источников. Холодные остаются в истории (/my, аналитика). Ручной /add — решение
-    # живого человека, его карточка в группе всегда.
-    if source == "manual" or lead.get("category") in ("hot", "warm"):
+    # живого человека, его карточка в группе всегда. Лид без контакта тоже едет в группу:
+    # разбирать пост и искать связь может только человек.
+    if source == "manual" or lead.get("kind") == "unknown" or lead.get("category") in ("hot", "warm"):
         await post_to_group(lead)
     return "created", lead
 
@@ -282,6 +283,8 @@ def render_card(lead: dict, mode: str = "group", assignee: dict | None = None, r
     if data.get("product"):
         lines.append(f"Продукт: {h(data['product'])}")
     lines.append("Контакт: " + contact_line(lead, reveal=reveal))
+    if lead["kind"] == "unknown":
+        lines.append("<i>Контакт в посте не найден — открой пост по ссылке и найди связь вручную</i>")
     if data.get("personal_fact"):
         lines.append(f"Факт для первого сообщения: {h(data['personal_fact'])}")
     if lead["risk_topic"] != "none":
