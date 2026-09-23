@@ -33,6 +33,10 @@ async def main():
     cap, reasons = await gates.evaluate({"vertical": "dota2", "subscribers": 1000, "avg_views": 500})
     check("нет инвентаря -> cap 25", cap == gates.CAP_REJECT and reasons)
 
+    # G1: вертикаль неизвестна (экономный режим без ИИ) — не режем, это не «other».
+    cap, reasons = await gates.evaluate({"subscribers": 1000, "avg_views": 500})
+    check("вертикаль None -> проходит", cap == 100 and not reasons)
+
     # G1 off: strict_vertical выключен — вертикаль не режет.
     await st.set_value("gate_strict_vertical", "off")
     cap, reasons = await gates.evaluate({"vertical": "dota2", "subscribers": 1000, "avg_views": 500})

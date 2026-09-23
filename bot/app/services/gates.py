@@ -39,14 +39,17 @@ async def evaluate(lead: dict) -> tuple[int, list[str]]:
 
     subs = lead.get("subscribers") or 0
     views = lead.get("avg_views") or 0
-    vertical = lead.get("vertical") or "other"
+    # Вертикаль неизвестная (None) — это не «неподходящая», а «неопределённая»: в экономном
+    # режиме без ИИ она не заполняется вовсе, и резать таких лидов нельзя. Резим только
+    # «other» — когда ИИ явно не смог отнести лид ни к одной нашей вертикали.
+    vertical = lead.get("vertical")
     about = f"{lead.get('about') or ''} {lead.get('title') or ''} {lead.get('ad_text') or ''}"
 
     net = await our_network()
-    slot = net.get(vertical)
+    slot = net.get(vertical) if vertical else None
 
     # G1: нет нашего инвентаря в вертикали — продавать нечего.
-    if await st.get("gate_strict_vertical") == "on" and slot is None:
+    if await st.get("gate_strict_vertical") == "on" and vertical and slot is None:
         cap = min(cap, CAP_REJECT)
         reasons.append(f"нет наших каналов в вертикали «{vertical}»")
 

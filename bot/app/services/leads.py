@@ -200,7 +200,11 @@ async def create_lead(
     await log_event(lead_id, created_by, "created", source)
     if gate_reasons:
         await log_event(lead_id, created_by, "gated", "; ".join(gate_reasons))
-    await post_to_group(lead)
+    # В группу попадают только лиды, стоящие очереди: горячие и тёплые от автоматических
+    # источников. Холодные остаются в истории (/my, аналитика). Ручной /add — решение
+    # живого человека, его карточка в группе всегда.
+    if source == "manual" or lead.get("category") in ("hot", "warm"):
+        await post_to_group(lead)
     return "created", lead
 
 
@@ -592,7 +596,7 @@ async def won(lead: dict, senior: dict, amount: int, margin: int | None) -> str:
     await log_event(lead["id"], senior["id"], "won", f"{amount}/{margin}")
     if lead.get("assigned_to"):
         points = await rating.add(lead["assigned_to"], "won", lead["id"])
-        text = f"🏆 Сделка по лиду #{lead['id']} «{h(lead['title'])}» закрыта на {amount:,} ₽. +{points} баллов!".replace(",", " ")
+        text = f"🏆 Сделка по лиду #{lead['id']} «{h(lead['title'])}» закрыта на {amount:,} ��. +{points} баллов!".replace(",", " ")
         # ТЗ 9.2: повторная сделка с тем же клиентом — отдельный бонус.
         repeat = await db.scalar(
             "SELECT COUNT(*) FROM leads WHERE entity_key = ? AND status = 'WON' AND id != ?", (lead["entity_key"], lead["id"])
