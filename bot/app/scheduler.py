@@ -370,7 +370,10 @@ async def search_job() -> None:
     if now_ts - _last_search_check < 1800 or not await in_work_hours():
         return
     _last_search_check = now_ts
-    created = await search_poller.run_due()
+    # ТЗ 4.2: провайдер №1 (MTProto, бесплатный) и №2 (Trustat Search, по квоте) — на одном списке слов.
+    created_mtproto = await search_poller.run_due_mtproto()
+    created_trustat = await search_poller.run_due()
+    created = created_mtproto + created_trustat
     if created:
         log.info("Поиск по ключевым словам дал %s новых лидов", created)
 

@@ -40,11 +40,11 @@ STATUS_RU = {
 
 # Какие действия карточки доступны на каждом статусе (кнопки private_card_kb и проверки в handlers).
 ACTIONS: dict[str, frozenset[str]] = {
-    NEW: frozenset({"claim", "nt", "dup", "dnc"}),
-    CLAIMED: frozenset({"wrote", "chk", "dnc", "nt", "hand", "note"}),
-    CONTACTED: frozenset({"replied", "touch", "post", "chk", "dnc", "nt", "hand", "note"}),
-    REPLIED: frozenset({"hand", "chk", "post", "dnc", "nt", "note"}),
-    POSTPONED: frozenset({"hand", "dnc", "nt", "note"}),
+    NEW: frozenset({"claim", "nt", "dup", "dnc", "merge"}),
+    CLAIMED: frozenset({"wrote", "chk", "dnc", "nt", "hand", "note", "merge"}),
+    CONTACTED: frozenset({"replied", "touch", "post", "chk", "dnc", "nt", "hand", "note", "merge"}),
+    REPLIED: frozenset({"hand", "chk", "post", "dnc", "nt", "note", "merge"}),
+    POSTPONED: frozenset({"hand", "dnc", "nt", "note", "merge"}),
     HANDOFF: frozenset({"note"}),
     ACCEPTED: frozenset({"note"}),
     WON: frozenset(),

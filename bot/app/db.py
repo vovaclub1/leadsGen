@@ -26,6 +26,11 @@ MIGRATIONS: tuple[tuple[str, str, str, str | None], ...] = (
   ("ad_posts", "views_48h", "INTEGER", None),
   # ТЗ 4.1/8: последние размещения клиента с реальным охватом — в карточку передачи старшему.
   ("leads", "reach_note", "TEXT", None),
+  # ТЗ 4.2 п.1: своя цикличность у бесплатного MTProto-поиска, отдельная от платного Trustat Search.
+  ("keywords", "mtproto_last_run", "TEXT", None),
+  ("keywords", "mtproto_found", "INTEGER NOT NULL DEFAULT 0", None),
+  # ТЗ 5.2 «связывание сущностей»: сущность, на которую канал/сайт сослался — кандидат на автосклейку.
+  ("leads", "linked_key", "TEXT", None),
   )
 
 

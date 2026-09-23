@@ -1,7 +1,9 @@
 """Обогащение лида: описание, подписчики, просмотры, контакт. Сначала MTProto (если сканер залогинен), иначе Bot API."""
+import html as html_lib
 import logging
 import re
 
+import httpx
 from aiogram.exceptions import TelegramAPIError
 
 from app import runtime
@@ -12,6 +14,20 @@ log = logging.getLogger(__name__)
 MENTION_RE = re.compile(r"(?:t\.me/|@)([A-Za-z][A-Za-z0-9_]{3,31})")
 CONTACT_HINT_RE = re.compile(r"реклам|сотрудн|менеджер|manager|\bads?\b|\bpr\b|связ|contact|вопрос|предлож|админ|admin|owner|владел", re.I)
 SKIP = {"joinchat", "addstickers", "share", "proxy", "socks", "iv", "s", "c"}
+
+# ---------- сайт-рекламодатель (ТЗ 4.1: лёгкий HTTP-запрос главной и /contacts, без браузера) ----------
+SITE_TIMEOUT = 8.0
+SITE_PATHS = ("", "/contacts")
+SITE_LINK_RE = re.compile(r"(?:https?://)?(?:t\.me|telegram\.me)/(?!joinchat|c/|\+)([A-Za-z][A-Za-z0-9_]{3,31})", re.I)
+TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+DESC_RE = re.compile(
+    r'<meta[^>]+(?:name|property)=["\'](?:description|og:description)["\'][^>]*content=["\'](.*?)["\']|'
+    r'<meta[^>]+content=["\'](.*?)["\'][^>]*(?:name|property)=["\'](?:description|og:description)["\']',
+    re.I,
+)
+TAG_RE = re.compile(r"<[^>]+>")
+# Домен рекламодателя, если он упомянул сайт в описании — кандидат на автосклейку (ТЗ 5.2).
+SITE_URL_RE = re.compile(r"https?://([^\s/\"'<>]+)", re.I)
 
 
 def extract_contact(about: str | None, own_username: str | None) -> str | None:
@@ -34,17 +50,82 @@ def extract_contact(about: str | None, own_username: str | None) -> str | None:
 
 
 async def enrich(lead: dict) -> dict:
-    username = lead.get("username")
-    if not username or lead.get("kind") == "site":
-        return {}
-    data = await _via_telethon(username)
-    if data is None:
-        data = await _via_bot_api(username)
-    if not data:
-        return {}
-    if data.get("kind") != "user":
-        data["contact_username"] = extract_contact(data.get("about"), username)
+    if lead.get("kind") == "site":
+        data = await _via_site(lead.get("url"))
+    else:
+        username = lead.get("username")
+        if not username:
+            return {}
+        data = await _via_telethon(username)
+        if data is None:
+            data = await _via_bot_api(username)
+        if not data:
+            return {}
+        if data.get("kind") != "user":
+            data["contact_username"] = extract_contact(data.get("about"), username)
+    if data:
+        linked = _linked_key(lead, data)
+        if linked:
+            data["linked_key"] = linked
     return data
+
+
+def _clean(text: str) -> str | None:
+    return trunc(re.sub(r"\s+", " ", TAG_RE.sub(" ", html_lib.unescape(text))).strip(), 300) or None
+
+
+async def _via_site(url: str | None) -> dict:
+    """ТЗ 4.1: рекламодатель — сайт → лёгкий HTTP-запрос главной и /contacts без браузера, ищем t.me-ссылки."""
+    if not url:
+        return {}
+    base = (url if url.startswith("http") else f"https://{url}").split("?")[0].rstrip("/")
+    title = about = contact_username = None
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MorierLeadHunterBot/1.0)"}
+    async with httpx.AsyncClient(timeout=SITE_TIMEOUT, follow_redirects=True, headers=headers) as client:
+        for path in SITE_PATHS:
+            try:
+                resp = await client.get(base + path)
+            except httpx.HTTPError as exc:
+                log.info("Сайт %s%s недоступен: %s", base, path, exc)
+                continue
+            if resp.status_code >= 400:
+                continue
+            body = resp.text
+            if not title:
+                match = TITLE_RE.search(body)
+                title = _clean(match.group(1)) if match else None
+            if not about:
+                match = DESC_RE.search(body)
+                about = _clean(match.group(1) or match.group(2)) if match else None
+            if not contact_username:
+                match = SITE_LINK_RE.search(body)
+                contact_username = match.group(1) if match else None
+            if title and about and contact_username:
+                break
+    if not title and not about and not contact_username:
+        return {}
+    data: dict = {"title": title, "about": about}
+    if contact_username:
+        data["contact_username"] = contact_username
+    return data
+
+
+def _linked_key(lead: dict, data: dict) -> str | None:
+    """ТЗ 5.2 «связывание сущностей»: канал ссылается на сайт, сайт — на канал → одна сущность.
+
+    Кандидат сохраняется на лиде даже без немедленного совпадения: как только вторая сторона
+    (сайт или канал) заведётся своим лидом, create_lead найдёт этот linked_key и склеит их.
+    """
+    if lead.get("kind") == "site":
+        contact = data.get("contact_username")
+        return f"tg:{contact.lower()}" if contact else None
+    about = data.get("about") or ""
+    for match in SITE_URL_RE.finditer(about):
+        domain = match.group(1).lower().removeprefix("www.")
+        if domain.endswith("t.me") or domain.endswith("telegram.me"):
+            continue
+        return f"site:{domain}"
+    return None
 
 
 async def _via_telethon(username: str) -> dict | None:

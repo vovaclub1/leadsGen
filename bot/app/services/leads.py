@@ -12,7 +12,7 @@ from app.keyboards import group_card_kb, private_card_kb, supervise_kb
 from app.services import channels, dnc, enrich, gates, rating, scoring, trustat
 from app.services.ai import ai, few_shot_examples
 from app.statuses import (
-    ACCEPTED, ACTIVE, CLAIMED, CONTACTED, HANDOFF, NEW, POSTPONED, REPLIED, STATUS_RU, WON, is_open,
+    ACCEPTED, ACTIVE, CLAIMED, CONTACTED, DUPLICATE, HANDOFF, NEW, POSTPONED, REPLIED, STATUS_RU, WON, is_open,
 )
 from app.utils import fmt_num, fmt_time, h, in_days, in_minutes, mention, minutes_left, now_iso, now_utc, parse_iso, trunc
 
@@ -133,6 +133,15 @@ async def create_lead(
         if closed_at and (now_utc() - closed_at).days < await st.get_int(cooldown_key):
             return "cooldown", existing
 
+    # ТЗ 5.2 «связывание сущностей»: другое представление (канал/сайт/бот) этого же бизнеса уже
+    # раскрыло связь с этим ключом — не плодим второй лид, обогащаем тот, что уже в очереди/работе.
+    linked = await db.fetchone("SELECT * FROM leads WHERE linked_key = ? ORDER BY id DESC LIMIT 1", (key,))
+    if linked and is_open(linked["status"]):
+        if source == "scanner":
+            await update(linked["id"], {"ad_count": linked["ad_count"] + 1})
+            await _notify_new_placement(linked, donor)
+        return "dup_active", await get(linked["id"])
+
     ad_count = await db.scalar(
         "SELECT COUNT(*) FROM ad_posts WHERE advertiser_key = ? AND created_at > ?", (key, in_days(-30))
     ) or 0
@@ -151,6 +160,22 @@ async def create_lead(
     except Exception as exc:  # noqa: BLE001
         log.warning("Обогащение лида #%s: %s", lead_id, exc)
         extra = {}
+
+    # ТЗ 5.2: обогащение только сейчас раскрыло ссылку (описание канала → сайт, или наоборот) —
+    # если сущность с таким ключом уже открыта, склеиваем автоматически, а не заводим второй лид.
+    linked_key = extra.get("linked_key") if extra else None
+    if linked_key and linked_key != key:
+        canonical = await db.fetchone(
+            "SELECT * FROM leads WHERE entity_key = ? AND id <> ? ORDER BY id DESC LIMIT 1", (linked_key, lead_id)
+        )
+        if canonical and is_open(canonical["status"]):
+            await update(lead_id, {**extra, "status": DUPLICATE, "closed_at": now_iso()})
+            if source == "scanner":
+                await update(canonical["id"], {"ad_count": canonical["ad_count"] + 1})
+            await log_event(lead_id, created_by, "merged_into", str(canonical["id"]))
+            await _notify_merge(await get(canonical["id"]), lead_id)
+            return "dup_active", await get(canonical["id"])
+
     if extra:
         await update(lead_id, extra)
         lead = await get(lead_id)
@@ -217,6 +242,19 @@ async def _notify_new_placement(lead: dict, donor: str | None) -> None:
             lead["assigned_to"],
             f"📡 У вашего лида #{lead['id']} «{h(lead['title'])}» вышло новое размещение в @{h(donor)}. "
             f"Хороший повод написать: клиент сейчас в закупе.",
+        )
+    except TelegramAPIError:
+        pass
+
+
+async def _notify_merge(canonical: dict, other_id: int) -> None:
+    if not canonical.get("assigned_to") or not runtime.bot:
+        return
+    try:
+        await runtime.bot.send_message(
+            canonical["assigned_to"],
+            f"🔗 К вашему лиду #{canonical['id']} «{h(canonical['title'])}» присоединили лид #{other_id} — тот же "
+            f"бизнес под другим представлением (канал/сайт/бот). Хороший повод написать.",
         )
     except TelegramAPIError:
         pass
@@ -583,6 +621,27 @@ async def mark_duplicate(lead: dict, me: dict) -> str:
     fresh = await get(lead["id"])
     await update_group_card(fresh, f"♻️ Дубликат · {mention(me)}")
     return f"Отмечен как дубликат, +{points}."
+
+
+# ---------- ручная склейка сущностей (ТЗ 5.2, кнопка «Объединить с #…») ----------
+
+async def merge_into(lead: dict, target_id: int, me: dict) -> str:
+    """Человек увидел то, что автосклейка в create_lead не поймала: те же карточки — один бизнес."""
+    if target_id == lead["id"]:
+        return "Нельзя объединить лид с самим собой."
+    target = await get(target_id)
+    if not target:
+        return f"Лид #{target_id} не найден."
+    if not is_open(target["status"]):
+        return f"Лид #{target_id} уже закрыт — объединять не с чем."
+    await update(lead["id"], {"status": DUPLICATE, "linked_key": target["entity_key"], "closed_at": now_iso()})
+    await update(target["id"], {"ad_count": target["ad_count"] + 1})
+    await log_event(lead["id"], me["id"], "merged_into", str(target["id"]))
+    points = await rating.add(me["id"], "duplicate", lead["id"])
+    fresh = await get(lead["id"])
+    await update_group_card(fresh, f"🔗 Объединён с #{target_id} · {mention(me)}")
+    await _notify_merge(await get(target["id"]), lead["id"])
+    return f"Лид #{lead['id']} объединён с #{target['id']}, +{points}."
 
 
 # ---------- передача старшему ----------

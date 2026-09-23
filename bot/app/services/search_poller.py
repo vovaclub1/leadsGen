@@ -1,4 +1,5 @@
 """Поиск спроса по ключевым словам через Trustat Search API: «ищу каналы для рекламы», «куплю рекламу» и т.п."""
+import asyncio
 import logging
 import re
 from datetime import timedelta
@@ -57,6 +58,48 @@ async def run_keyword(row: dict) -> int:
             created += 1
     await db.execute("UPDATE keywords SET last_run = ?, found = found + ? WHERE id = ?", (now_iso(), created, row["id"]))
     log.info("Search «%s»: постов %s, новых лидов %s", row["word"], len(posts), created)
+    return created
+
+
+# ТЗ 4.2 п.1: провайдер №1 — бесплатный MTProto, лимитирован только флудом аккаунта, не квотой ключа.
+# Гоняем его чаще, чем платный Trustat, но не на каждый тик джоба — бережём сканер.
+MTPROTO_RUN_EVERY = timedelta(hours=6)
+
+
+async def run_due_mtproto() -> int:
+    from app.services.scanner import scanner
+
+    if not scanner.client:
+        return 0
+    rows = await db.fetchall("SELECT * FROM keywords WHERE active = 1")
+    created = 0
+    for row in rows:
+        last_run = parse_iso(row.get("mtproto_last_run"))
+        if last_run and now_utc() - last_run < MTPROTO_RUN_EVERY:
+            continue
+        created += await _run_keyword_mtproto(row)
+        await asyncio.sleep(2)  # пауза между словами — та же дисциплина лимитов, что и у сканера
+    return created
+
+
+async def _run_keyword_mtproto(row: dict) -> int:
+    from app.services import leads
+    from app.services.scanner import scanner
+
+    channels = await scanner.search_channels(row["word"])
+    created = 0
+    for item in channels:
+        ref = leads.parse_ref("@" + item["username"])
+        if not ref:
+            continue
+        status, _ = await leads.create_lead(ref, source="search", keyword=row["word"])
+        if status == "created":
+            created += 1
+    await db.execute(
+        "UPDATE keywords SET mtproto_last_run = ?, mtproto_found = mtproto_found + ? WHERE id = ?",
+        (now_iso(), created, row["id"]),
+    )
+    log.info("MTProto-поиск «%s»: каналов %s, новых лидов %s", row["word"], len(channels), created)
     return created
 
 

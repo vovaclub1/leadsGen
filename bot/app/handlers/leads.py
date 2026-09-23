@@ -1,4 +1,6 @@
 """Кнопки карточки: беру / написал / ответил / касание / нецелевой / просил не писать / передать / заметка / проверка текста."""
+import re
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -37,6 +39,10 @@ class NoteSt(StatesGroup):
 
 class DraftSt(StatesGroup):
     text = State()
+
+
+class MergeSt(StatesGroup):
+    target = State()
 
 
 CREATE_RESULT = {
@@ -146,6 +152,35 @@ async def duplicate(query: CallbackQuery, callback_data: LeadCb, me: dict) -> No
         await query.answer("Лид уже не в очереди.", show_alert=True)
         return
     await query.answer(await leads.mark_duplicate(lead, me))
+
+
+# ---------- объединение с другим лидом (ТЗ 5.2) ----------
+
+@router.callback_query(LeadCb.filter(F.a == "merge"), SELLERS)
+async def merge_start(query: CallbackQuery, callback_data: LeadCb, me: dict, state: FSMContext) -> None:
+    lead = await _lead_for(query, callback_data.id, me)
+    if not lead or not can(lead["status"], "merge"):
+        await query.answer("Лид уже закрыт.", show_alert=True)
+        return
+    await state.set_state(MergeSt.target)
+    await state.update_data(lead_id=lead["id"])
+    await query.message.answer(f"С каким лидом объединить #{lead['id']}? Пришлите его номер, например 42. /cancel — отмена.")
+    await query.answer()
+
+
+@router.message(MergeSt.target, SELLERS, F.text)
+async def merge_apply(message: Message, me: dict, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.clear()
+    digits = re.sub(r"[^\d]", "", message.text or "")
+    if not digits:
+        await message.answer("Нужен номер лида, например 42.")
+        return
+    lead = await leads.get(data.get("lead_id", 0))
+    if not lead:
+        await message.answer("Лид не найден.")
+        return
+    await message.answer(await leads.merge_into(lead, int(digits), me))
 
 
 # ---------- нецелевой ----------

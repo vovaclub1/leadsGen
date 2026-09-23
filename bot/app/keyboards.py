@@ -48,7 +48,9 @@ def group_card_kb(lead_id: int) -> InlineKeyboardMarkup:
     b.button(text="🙋 Беру", callback_data=LeadCb(a="claim", id=lead_id))
     b.button(text="❌ Нецелевой", callback_data=LeadCb(a="nt", id=lead_id))
     b.button(text="♻️ Дубликат", callback_data=LeadCb(a="dup", id=lead_id))
-    b.adjust(1, 2)
+    # ТЗ 5.2: если бот не увидел связь канал/сайт/бот сам — человек объединяет карточки руками.
+    b.button(text="🔗 Объединить с #…", callback_data=LeadCb(a="merge", id=lead_id))
+    b.adjust(1, 2, 1)
     return b.as_markup()
 
 
@@ -66,7 +68,8 @@ def private_card_kb(lead: dict, role: str) -> InlineKeyboardMarkup | None:
     if status == "NEW":
         b.button(text="🙋 Беру", callback_data=LeadCb(a="claim", id=lid))
         b.button(text="❌ Нецелевой", callback_data=LeadCb(a="nt", id=lid))
-        b.adjust(1, 1)
+        b.button(text="🔗 Объединить с #…", callback_data=LeadCb(a="merge", id=lid))
+        b.adjust(1, 1, 1)
         return b.as_markup()
     if status == "CLAIMED":
         b.button(text="✉️ Написал — подтвердить", callback_data=LeadCb(a="wrote", id=lid))
@@ -75,7 +78,8 @@ def private_card_kb(lead: dict, role: str) -> InlineKeyboardMarkup | None:
         b.button(text="❌ Нецелевой", callback_data=LeadCb(a="nt", id=lid))
         b.button(text="⬆️ Передать старшему", callback_data=LeadCb(a="hand", id=lid))
         b.button(text="🗒 Заметка", callback_data=LeadCb(a="note", id=lid))
-        b.adjust(1, 1, 2, 2)
+        b.button(text="🔗 Объединить с #…", callback_data=LeadCb(a="merge", id=lid))
+        b.adjust(1, 1, 2, 2, 1)
         return b.as_markup()
     if status == "CONTACTED":
         b.button(text="💬 Клиент ответил", callback_data=LeadCb(a="replied", id=lid))
@@ -86,7 +90,8 @@ def private_card_kb(lead: dict, role: str) -> InlineKeyboardMarkup | None:
         b.button(text="❌ Нецелевой", callback_data=LeadCb(a="nt", id=lid))
         b.button(text="⬆️ Передать старшему", callback_data=LeadCb(a="hand", id=lid))
         b.button(text="🗒 Заметка", callback_data=LeadCb(a="note", id=lid))
-        b.adjust(1, 2, 1, 2, 2)
+        b.button(text="🔗 Объединить с #…", callback_data=LeadCb(a="merge", id=lid))
+        b.adjust(1, 2, 1, 2, 2, 1)
         return b.as_markup()
     if status == "REPLIED":
         b.button(text="⬆️ Передать старшему", callback_data=LeadCb(a="hand", id=lid))
@@ -95,14 +100,16 @@ def private_card_kb(lead: dict, role: str) -> InlineKeyboardMarkup | None:
         b.button(text="🚫 Просил не писать", callback_data=LeadCb(a="dnc", id=lid))
         b.button(text="❌ Нецелевой", callback_data=LeadCb(a="nt", id=lid))
         b.button(text="🗒 Заметка", callback_data=LeadCb(a="note", id=lid))
-        b.adjust(1, 2, 2, 1)
+        b.button(text="🔗 Объединить с #…", callback_data=LeadCb(a="merge", id=lid))
+        b.adjust(1, 2, 2, 1, 1)
         return b.as_markup()
     if status == "POSTPONED":
         b.button(text="⬆️ Передать старшему", callback_data=LeadCb(a="hand", id=lid))
         b.button(text="🚫 Просил не писать", callback_data=LeadCb(a="dnc", id=lid))
         b.button(text="❌ Нецелевой", callback_data=LeadCb(a="nt", id=lid))
         b.button(text="🗒 Заметка", callback_data=LeadCb(a="note", id=lid))
-        b.adjust(1, 2, 1)
+        b.button(text="🔗 Объединить с #…", callback_data=LeadCb(a="merge", id=lid))
+        b.adjust(1, 2, 1, 1)
         return b.as_markup()
     if status == "HANDOFF" and role in ("owner", "senior"):
         return handoff_kb(lid)

@@ -61,7 +61,10 @@ async def key_detail(target, key_id: int) -> None:
     if key.get("last_error"):
         text += f"Последняя ошибка: {h(key['last_error'])}\n"
     if words:
-        text += "\nКлючевые слова:\n" + "\n".join(f"• {h(w['word'])} — найдено {w['found']} · /kw_{w['id']}" for w in words)
+        # Trustat — платный провайдер №2 по ключу; MTProto (бесплатный провайдер №1, ТЗ 4.2) гоняет те же слова без квоты.
+        text += "\nКлючевые слова:\n" + "\n".join(
+            f"• {h(w['word'])} — Trustat {w['found']} · MTProto {w['mtproto_found'] or 0} · /kw_{w['id']}" for w in words
+        )
     await _show(target, text, key_kb(key))
 
 
@@ -160,7 +163,7 @@ async def key_scope(query: CallbackQuery, callback_data: AdmCb, state: FSMContex
 async def key_limits(query: CallbackQuery, callback_data: AdmCb, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("raw_key"):
-        await query.answer("Начните добавление заново.", show_alert=True)
+        await query.answer("Начните добавление ��аново.", show_alert=True)
         return
     if callback_data.v == "custom":
         await state.set_state(AddKey.limits)
@@ -247,7 +250,10 @@ async def keyword_open(message: Message, match) -> None:
         await message.answer("Слово не найдено.")
         return
     await message.answer(
-        f"«{h(word['word'])}» · найдено лидов: {word['found']} · последний запуск: {fmt_date(word['last_run']) if word['last_run'] else 'ещё не было'}",
+        f"«{h(word['word'])}»\n"
+        f"Trustat (провайдер №2): найдено {word['found']} · последний запуск: {fmt_date(word['last_run']) if word['last_run'] else 'ещё не было'}\n"
+        f"MTProto (провайдер №1, бесплатный): найдено {word['mtproto_found'] or 0} · последний запуск: "
+        f"{fmt_date(word['mtproto_last_run']) if word.get('mtproto_last_run') else 'ещё не было'}",
         reply_markup=kw_item_kb(word["id"], word["api_key_id"]),
     )
 

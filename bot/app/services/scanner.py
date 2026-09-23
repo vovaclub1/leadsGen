@@ -170,6 +170,35 @@ class Scanner:
         log.info("Автопоиск доноров: опрошено %s каналов, кандидатов %s, новых %s", checked, len(found), fresh)
         return {"ok": True, "checked": checked, "total": len(found), "fresh": fresh}
 
+    async def search_channels(self, query: str, limit: int = 15) -> list[dict]:
+        """ТЗ 4.2 п.1: провайдер №1 — бесплатный глобальный поиск Telegram по названию/описанию.
+
+        В отличие от Trustat Search (провайдер №2, платный и лимитированный по словам/запросам),
+        это встроенный поиск самого Telegram — квоты нет, только флуд-контроль аккаунта-сканера.
+        """
+        if not self.client:
+            return []
+        from telethon.errors import FloodWaitError
+        from telethon.tl.functions.contacts import SearchRequest
+        from telethon.tl.types import Channel
+
+        try:
+            result = await self.client(SearchRequest(q=query, limit=limit, broadcasts=True))
+        except FloodWaitError as exc:
+            log.warning("FloodWait %s сек при глобальном поиске «%s» — жду", exc.seconds, query)
+            return []
+        except Exception as exc:  # noqa: BLE001
+            log.info("Глобальный поиск «%s» не удался: %s", query, exc)
+            return []
+
+        out: list[dict] = []
+        for chat in result.chats:
+            username = getattr(chat, "username", None)
+            if not username or not isinstance(chat, Channel) or getattr(chat, "megagroup", False):
+                continue
+            out.append({"username": username, "title": getattr(chat, "title", None)})
+        return out
+
     async def _download_image(self, message) -> bytes | None:
         """Скачивает картинку поста в память. Видео и документы пропускаем — читаем только изображения."""
         media = getattr(message, "photo", None)
