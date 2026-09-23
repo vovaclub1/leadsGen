@@ -13,11 +13,21 @@ log = logging.getLogger(__name__)
 LINK_RE = re.compile(r"t\.me/(?!c/|joinchat|\+)([A-Za-z][A-Za-z0-9_]{3,31})", re.I)
 # Контакты в постах спроса чаще пишут голым @username, а не ссылкой t.me.
 MENTION_RE = re.compile(r"(?<![\w@])@([A-Za-z][A-Za-z0-9_]{4,31})")
-# ТЗ 4.2: «Глубина 3 дня → опрос каждого слова раз в 2 дня, ничего не теряется» — тем же
-# 100 запросов/мес на бесплатном ключе хватает без риска сжечь квоту раньше конца месяца.
+# ТЗ 4.2: «Глубина 3 дня → опрос каждого слова раз в 2 дня, ничего не теряется» — база для активных слов,
+# тем же 100 запросов/мес на бесплатном ключе хватает без риска сжечь квоту раньше конца месяца.
 # Плюс страницы выдачи — без них популярное слово теряло всё, что не влезло в первые 50 постов.
-RUN_EVERY = timedelta(days=2)
+#
+# Адаптивный шаг: слово, у которого подряд несколько заходов вообще не нашли ни одного поста
+# (спрос по нему сейчас не пишут), опрашивается всё реже — освобождает квоту для слов, которые
+# реально приносят лиды. Как только по слову снова хоть что-то нашлось — счётчик сбрасывается
+# и слово возвращается к базовому шагу в 2 дня.
+BACKOFF_STEPS = (timedelta(days=2), timedelta(days=4), timedelta(days=7), timedelta(days=14))
 PAGE_LIMIT = 3
+
+
+def interval_for(empty_streak: int) -> timedelta:
+    """Публичная — используется и в run_due(), и в админке для показа текущего шага опроса."""
+    return BACKOFF_STEPS[min(empty_streak, len(BACKOFF_STEPS) - 1)]
 
 
 async def run_due() -> int:
@@ -25,7 +35,7 @@ async def run_due() -> int:
     created = 0
     for row in rows:
         last_run = parse_iso(row["last_run"])
-        if last_run and now_utc() - last_run < RUN_EVERY:
+        if last_run and now_utc() - last_run < interval_for(row["empty_streak"] or 0):
             continue
         created += await run_keyword(row)
     return created
@@ -56,8 +66,18 @@ async def run_keyword(row: dict) -> int:
         status, _ = await leads.create_lead(ref, source="search", keyword=row["word"], ad_text=text)
         if status == "created":
             created += 1
-    await db.execute("UPDATE keywords SET last_run = ?, found = found + ? WHERE id = ?", (now_iso(), created, row["id"]))
-    log.info("Search «%s»: постов %s, новых лидов %s", row["word"], len(posts), created)
+
+    # Ноль постов за всё окно — слово сейчас «молчит», не только эта конкретная волна дубликатов.
+    empty_streak = 0 if posts else (row["empty_streak"] or 0) + 1
+    await db.execute(
+        "UPDATE keywords SET last_run = ?, found = found + ?, empty_streak = ? WHERE id = ?",
+        (now_iso(), created, empty_streak, row["id"]),
+    )
+    next_in = interval_for(empty_streak).days
+    log.info(
+        "Search «%s»: постов %s, новых лидов %s, тишина подряд %s заходов, следующий через %s дн.",
+        row["word"], len(posts), created, empty_streak, next_in,
+    )
     return created
 
 

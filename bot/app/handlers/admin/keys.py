@@ -12,7 +12,7 @@ from app.db import db
 from app.filters import OWNER
 from app.handlers.helpers import show as _show
 from app.keyboards import back_kb, confirm_kb, key_kb, keys_kb, kw_item_kb, kw_skip_kb, limits_kb, scope_kb
-from app.services import keypool, trustat
+from app.services import keypool, search_poller, trustat
 from app.utils import fmt_date, h, now_iso
 
 router = Router(name="admin-keys")
@@ -36,7 +36,8 @@ async def keys_view(target) -> None:
         "<b>🔑 API-ключи Trustat</b>\n"
         f"Stat: {pool['stat'][2]} ключей, осталось {pool['stat'][0]} из {pool['stat'][1]} в месяц\n"
         f"Search: {pool['search'][2]} ключей, осталось {pool['search'][0]} из {pool['search'][1]}\n\n"
-        "Бот держит 20% месячной квоты в резерве под передачи старшему. Ключи с ролью Search работают по ключевым словам раз в 2 дня."
+        "Бот держит 20% месячной квоты в резерве под передачи старшему. Ключи с ролью Search работают по ключевым словам "
+        "раз в 2 дня, а слова, по которым давно ничего не находится, опрашиваются реже — экономят квоту для рабочих слов."
     )
     await _show(target, text, keys_kb(keys))
 
@@ -249,9 +250,15 @@ async def keyword_open(message: Message, match) -> None:
     if not word:
         await message.answer("Слово не найдено.")
         return
+    streak = word["empty_streak"] or 0
+    pace = (
+        f"тишина {streak} заход(ов) подряд — опрашиваю раз в {search_poller.interval_for(streak).days} дн."
+        if streak
+        else "находит посты — опрашиваю раз в 2 дня"
+    )
     await message.answer(
         f"«{h(word['word'])}»\n"
-        f"Trustat (провайдер №2): найдено {word['found']} · последний запуск: {fmt_date(word['last_run']) if word['last_run'] else 'ещё не было'}\n"
+        f"Trustat (провайдер №2): найдено {word['found']} · последний запуск: {fmt_date(word['last_run']) if word['last_run'] else 'ещё не было'} · {pace}\n"
         f"MTProto (провайдер №1, бесплатный): найдено {word['mtproto_found'] or 0} · последний запуск: "
         f"{fmt_date(word['mtproto_last_run']) if word.get('mtproto_last_run') else 'ещё не было'}",
         reply_markup=kw_item_kb(word["id"], word["api_key_id"]),

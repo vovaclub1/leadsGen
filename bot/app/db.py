@@ -29,6 +29,9 @@ MIGRATIONS: tuple[tuple[str, str, str, str | None], ...] = (
   # ТЗ 4.2 п.1: своя цикличность у бесплатного MTProto-поиска, отдельная от платного Trustat Search.
   ("keywords", "mtproto_last_run", "TEXT", None),
   ("keywords", "mtproto_found", "INTEGER NOT NULL DEFAULT 0", None),
+  # Адаптивная цикличность Trustat: считает подряд идущие заходы без единого поста по слову,
+  # чтобы реже дёргать «уставшие» слова и не жечь на них платную квоту.
+  ("keywords", "empty_streak", "INTEGER NOT NULL DEFAULT 0", None),
   # ТЗ 5.2 «связывание сущностей»: сущность, на которую канал/сайт сослался — кандидат на автосклейку.
   ("leads", "linked_key", "TEXT", None),
   )
