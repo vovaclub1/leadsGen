@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import timedelta
 
+from app import statuses
 from app.db import db
 from app.services import trustat
 from app.utils import now_iso, now_utc, parse_iso
@@ -21,6 +22,11 @@ MENTION_RE = re.compile(r"(?<![\w@])@([A-Za-z][A-Za-z0-9_]{4,31})")
 # (спрос по нему сейчас не пишут), опрашивается всё реже — освобождает квоту для слов, которые
 # реально приносят лиды. Как только по слову снова хоть что-то нашлось — счётчик сбрасывается
 # и слово возвращается к базовому шагу в 2 дня.
+#
+# Спрос-триггер: график выше не главный. Если в очереди не осталось ни одного открытого лида
+# именно от поиска (только от донор-сканера), это сигнал «поиск исчерпался как источник» — все
+# активные слова опрашиваются немедленно, вне графика, один раз, а дальше снова по расписанию,
+# пока очередь не опустеет заново (см. search_stack_empty() и run_due()).
 BACKOFF_STEPS = (timedelta(days=2), timedelta(days=4), timedelta(days=7), timedelta(days=14))
 PAGE_LIMIT = 3
 
@@ -30,14 +36,40 @@ def interval_for(empty_streak: int) -> timedelta:
     return BACKOFF_STEPS[min(empty_streak, len(BACKOFF_STEPS) - 1)]
 
 
+async def search_stack_empty() -> bool:
+    """Есть ли сейчас хоть один открытый лид именно от поиска (не от донор-сканера)?
+
+    Публичная — используется run_due() для решения «опросить прямо сейчас» и админкой
+    для показа причины внеочередного опроса.
+    """
+    placeholders = ",".join("?" for _ in statuses.CLOSED)
+    count = await db.scalar(
+        f"SELECT COUNT(*) FROM leads WHERE source = 'search' AND status NOT IN ({placeholders})",
+        statuses.CLOSED,
+    )
+    return not count
+
+
 async def run_due() -> int:
     rows = await db.fetchall("SELECT * FROM keywords WHERE active = 1")
+    stack_empty = await search_stack_empty()
+    if stack_empty:
+        log.info("Очередь лидов от поиска пуста (остались только доноры) — опрашиваю все слова вне графика")
+    else:
+        # Очередь снова живая — сбрасываем флаг «уже опрошено внеочередно», чтобы следующее
+        # опустошение очереди снова вызвало немедленный опрос, а не ждало обычный шаг.
+        await db.execute("UPDATE keywords SET force_poll_used = 0 WHERE force_poll_used = 1")
+
     created = 0
     for row in rows:
         last_run = parse_iso(row["last_run"])
-        if last_run and now_utc() - last_run < interval_for(row["empty_streak"] or 0):
+        on_schedule = last_run and now_utc() - last_run < interval_for(row["empty_streak"] or 0)
+        forced = stack_empty and not row["force_poll_used"]
+        if on_schedule and not forced:
             continue
         created += await run_keyword(row)
+        if forced:
+            await db.execute("UPDATE keywords SET force_poll_used = 1 WHERE id = ?", (row["id"],))
     return created
 
 
@@ -154,7 +186,7 @@ async def _authors(posts: list[dict]) -> list[tuple[str, str | None]]:
     if not out:
         for post in posts:
             text = post.get("text") or ""
-            # Сначала явные ссылки t.me, затем голые @упоминания — контакт рекламодателя.
+            # Сначала явные ссылки t.me, затем голые @упоминания — контакт рекл��модателя.
             for username in LINK_RE.findall(text) + MENTION_RE.findall(text):
                 if username.lower() in seen:
                     continue

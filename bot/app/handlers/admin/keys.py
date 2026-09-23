@@ -32,12 +32,18 @@ class AddKeyword(StatesGroup):
 async def keys_view(target) -> None:
     keys = await keypool.list_keys()
     pool = await keypool.pool_summary()
+    stack_note = (
+        " Сейчас очередь лидов от поиска пуста (остались только от доноров) — все слова опрашиваются вне графика."
+        if await search_poller.search_stack_empty()
+        else ""
+    )
     text = (
         "<b>🔑 API-ключи Trustat</b>\n"
         f"Stat: {pool['stat'][2]} ключей, осталось {pool['stat'][0]} из {pool['stat'][1]} в месяц\n"
         f"Search: {pool['search'][2]} ключей, осталось {pool['search'][0]} из {pool['search'][1]}\n\n"
         "Бот держит 20% месячной квоты в резерве под передачи старшему. Ключи с ролью Search работают по ключевым словам "
-        "раз в 2 дня, а слова, по которым давно ничего не находится, опрашиваются реже — экономят квоту для рабочих слов."
+        "раз в 2 дня, слова без находок опрашиваются реже, а если очередь от поиска опустела — немедленно."
+        f"{stack_note}"
     )
     await _show(target, text, keys_kb(keys))
 
@@ -256,6 +262,8 @@ async def keyword_open(message: Message, match) -> None:
         if streak
         else "находит посты — опрашиваю раз в 2 дня"
     )
+    if await search_poller.search_stack_empty() and not word["force_poll_used"]:
+        pace += " · очередь от поиска пуста, следующий опрос — сразу, вне графика"
     await message.answer(
         f"«{h(word['word'])}»\n"
         f"Trustat (провайдер №2): найдено {word['found']} · последний запуск: {fmt_date(word['last_run']) if word['last_run'] else 'ещё не было'} · {pace}\n"
