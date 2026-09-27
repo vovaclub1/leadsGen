@@ -15,7 +15,7 @@ from app.services import keypool, leads, report
 from app.services.ai import ai
 from app.services.scanner import scanner
 from app.statuses import ACTIVE
-from app.utils import h, in_days
+from app.utils import h, in_days, mention
 
 router = Router(name="admin-dashboard")
 
@@ -54,6 +54,44 @@ async def admin_root_cb(query: CallbackQuery, state: FSMContext) -> None:
 async def weekly_report(query: CallbackQuery) -> None:
     await query.answer("Собираю…")
     await _show(query, await report.weekly(), back_kb("root"))
+
+
+DAILY_NORM = 20  # памятка владельца: 20–30 касаний в день
+
+
+@router.callback_query(AdmCb.filter(F.s == "who"), OWNER)
+async def who_works(query: CallbackQuery) -> None:
+    rows = await db.fetchall(
+        "SELECT u.id, u.username, u.full_name, u.role, "
+        "SUM(e.type = 'claimed') AS claimed, SUM(e.type IN ('contacted', 'touch')) AS touches, "
+        "SUM(e.type = 'replied') AS replied, SUM(e.type = 'handoff') AS handoffs, MAX(e.created_at) AS last_at "
+        "FROM users u LEFT JOIN lead_events e ON e.user_id = u.id AND e.created_at > ? "
+        "WHERE u.status = 'active' AND u.role IN ('sdr', 'senior') GROUP BY u.id ORDER BY touches DESC",
+        (in_days(-7),),
+    )
+    won = await db.fetchall(
+        "SELECT hd.user_id, COUNT(DISTINCT l.id) AS c, COALESCE(SUM(l.won_margin), 0) AS margin FROM leads l "
+        "JOIN lead_events hd ON hd.lead_id = l.id AND hd.type = 'handoff' "
+        "JOIN lead_events w ON w.lead_id = l.id AND w.type = 'won' AND w.created_at > ? GROUP BY hd.user_id",
+        (in_days(-7),),
+    )
+    deals = {r["user_id"]: r for r in won}
+    week_norm = DAILY_NORM * 5
+    lines = [f"<b>🧑‍💻 Кто работает · 7 дней</b>\nНорма: {week_norm} касаний за неделю ({DAILY_NORM} в день × 5).\n"]
+    for r in rows:
+        touches = r["touches"] or 0
+        deal = deals.get(r["id"]) or {}
+        mark = "🟢" if touches >= week_norm else ("🟡" if touches >= week_norm // 2 else "🔴")
+        lines.append(
+            f"{mark} {mention(r)} — касаний {touches} · взял {r['claimed'] or 0} · ответов {r['replied'] or 0} · "
+            f"передал {r['handoffs'] or 0} · сделок {deal.get('c', 0)}"
+            + (f" (маржа {int(deal['margin']):,} ₽)".replace(",", " ") if deal.get("margin") else "")
+            + ("" if r["last_at"] else " · <i>ни одного действия</i>")
+        )
+    if len(lines) == 1:
+        lines.append("Нет активных сотрудников.")
+    lines.append("\n🔴 меньше половины нормы. По памятке: 7 дней ниже нормы — снимать с лидов.")
+    await _show(query, "\n".join(lines), back_kb("root"))
 
 
 @router.callback_query(AdmCb.filter(F.s == "dash"), OWNER)

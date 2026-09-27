@@ -345,7 +345,7 @@ def render_card(lead: dict, mode: str = "group", assignee: dict | None = None, r
         if lead["status"] == POSTPONED:
             lines.append("Каденция закрыта — клиент не ответил на 4 касания. Отметьте «Нецелевой» или передайте старшему с пометкой «молчит».")
         if lead["status"] == CLAIMED and data.get("draft"):
-            lines.append(f"\n<b>Черновик первого сообщения</b> — перепишите под себя, шаблоны клиенты чуют:\n<i>{h(data['draft'])}</i>")
+            lines.append(f"\n<b>Черновик первого сообщения</b> — нажмите на текст, чтобы скопировать, поправьте под себя:\n<code>{h(data['draft'])}</code>")
         if lead.get("note"):
             lines.append(f"\n🗒 Заметки:\n{h(lead['note'])}")
 

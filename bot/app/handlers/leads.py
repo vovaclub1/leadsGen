@@ -341,7 +341,7 @@ async def touch(query: CallbackQuery, callback_data: LeadCb, me: dict) -> None:
     if not lead:
         return
     if lead["status"] != CONTACTED:
-        await query.answer("Касания считаются только в статусе «контакт установлен».", show_alert=True)
+        await query.answer("Касания считаются только в статусе «��онтакт установлен».", show_alert=True)
         return
     await query.answer(await leads.touch_done(lead, me), show_alert=True)
 
@@ -420,6 +420,31 @@ async def draft_review(message: Message, me: dict, state: FSMContext) -> None:
     if not issues:
         lines.append("Можно отправлять.")
     await message.answer("\n\n".join(lines))
+
+
+# ---------- ИИ пишет текст, человек отправляет ----------
+
+@router.callback_query(LeadCb.filter(F.a == "aitxt"), SELLERS)
+async def ai_text(query: CallbackQuery, callback_data: LeadCb, me: dict) -> None:
+    lead = await _lead_for(query, callback_data.id, me)
+    if not lead:
+        return
+    if lead["status"] not in (CLAIMED, CONTACTED):
+        await query.answer("Текст пишется только до ответа клиента.", show_alert=True)
+        return
+    if not ai.enabled:
+        await query.answer("ИИ выключен: нет AI_API_KEY в .env.", show_alert=True)
+        return
+    await query.answer("Пишу…")
+    step = 1 if lead["status"] == CLAIMED else min(lead["touch_count"] + 1, 4)
+    text = await ai.write_touch(lead, step, leads.ai_data(lead).get("personal_fact"))
+    if not text:
+        await query.message.answer(f"ИИ не ответил: {h(ai.last_error or 'пустой ответ')}. Попробуйте ещё раз через минуту.")
+        return
+    await query.message.answer(
+        f"<b>Касание №{step} для #{lead['id']}</b> — нажмите на текст, чтобы скопировать. "
+        f"Замените [скобки] на свои данные и отправьте клиенту:\n\n<code>{h(text)}</code>"
+    )
 
 
 # ---------- передача старшему ----------
